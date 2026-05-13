@@ -1,0 +1,14 @@
+# Ignore local files to speed up Docker builds
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/*.db
+**/vault.key
+**/.env
+**/.venv
+**/dist
+**/build
+.git
+.gitignore
+docker-compose.yml

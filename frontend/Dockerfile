@@ -1,5 +1,9 @@
 # --- Frontend Dockerfile ---
-FROM node:18-alpine
+FROM node:20-alpine
+
+# Set environment variables for build
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 WORKDIR /app
 

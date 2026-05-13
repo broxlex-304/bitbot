@@ -7,6 +7,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional, List
 
+from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,6 +15,8 @@ from pydantic import BaseModel
 from bot.engine import engine, BotStatus
 from bot.exchange import exchange_client
 from bot.risk import risk_manager
+from bot.scanner import scanner
+from bot.alerts import telegram_alerts
 from bot import logger
 from bot.logger import register_ws_client, unregister_ws_client, get_logs, broadcast_event, _dumps
 from config import settings
@@ -24,15 +27,25 @@ from config import settings
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🔧 BitBot API starting up...")
-    if settings.api_key:
-        ok = exchange_client.connect()
-        if not ok:
-            exchange_client.connect_public()
+    
+    # Try loading encrypted credentials from DB first
+    from bot.database import get_setting
+    creds = get_setting("api_credentials", encrypted=True)
+    
+    if creds:
+        exchange_client.connect(creds["id"], creds["key"], creds["secret"])
+    elif settings.api_key:
+        exchange_client.connect()
     else:
         exchange_client.connect_public()
+        
+    scanner.start()
+    telegram_alerts.start()
+    asyncio.create_task(telegram_alerts.send_message("🚀 <b>BitBot Cloud Engine Online</b>\nMonitoring markets..."))
     yield
     logger.info("BitBot API shutting down...")
     engine.stop()
+    scanner.stop()
 
 
 app = FastAPI(
@@ -45,9 +58,27 @@ app = FastAPI(
 # Custom JSON Response to handle numpy types
 from fastapi.responses import JSONResponse
 import json
+import numpy as np
+
+def clean_data(obj):
+    """Recursively convert numpy types to python types."""
+    if isinstance(obj, dict):
+        return {k: clean_data(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_data(v) for v in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat() + "Z"
+    return obj
+
 class BitBotJSONResponse(JSONResponse):
     def render(self, content) -> bytes:
-        return _dumps(content).encode("utf-8")
+        return _dumps(clean_data(content)).encode("utf-8")
 
 app.default_response_class = BitBotJSONResponse
 
@@ -119,8 +150,6 @@ async def resume_bot():
 @app.post("/api/bot/analyze-now")
 async def analyze_now():
     """Trigger an immediate analysis cycle."""
-    if not engine.running:
-        return {"success": False, "message": "Bot is not running"}
     asyncio.ensure_future(engine._run_cycle())
     return {"success": True, "message": "Analysis triggered"}
 
@@ -131,6 +160,11 @@ async def get_prediction():
 @app.get("/api/bot/analysis")
 async def get_analysis():
     return engine.last_analysis or {"message": "No analysis yet"}
+
+@app.get("/api/scanner")
+async def get_scanner_results():
+    """Returns top scanned coins sorted by confidence."""
+    return {"results": scanner.scan_results}
 
 
 # ─── Settings ─────────────────────────────────────────────────────────────────
@@ -161,12 +195,22 @@ async def get_settings():
 
 @app.post("/api/exchange/connect")
 async def connect_exchange(req: ExchangeConnectRequest):
-    ok = exchange_client.connect(req.exchange_id, req.api_key, req.api_secret)
-    return {"success": ok, "exchange": req.exchange_id}
+    ok, message = exchange_client.connect(req.exchange_id, req.api_key, req.api_secret)
+    return {"success": ok, "message": message, "exchange": req.exchange_id}
 
 @app.get("/api/exchange/supported")
 async def get_supported_exchanges():
     return {"exchanges": exchange_client.get_supported_exchanges()}
+
+@app.get("/api/exchange/symbols")
+async def get_symbols():
+    if exchange_client.exchange and exchange_client.exchange.markets:
+        # Get all USDT spot markets
+        symbols = [s for s, m in exchange_client.exchange.markets.items() if m.get('quote') == 'USDT' and m.get('spot')]
+        if not symbols: # fallback
+            symbols = [s for s in exchange_client.exchange.markets.keys() if '/USDT' in s]
+        return {"symbols": sorted(list(set(symbols)))}
+    return {"symbols": ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT']}
 
 @app.get("/api/exchange/balance")
 async def get_balance():

@@ -6,7 +6,7 @@ when no API keys are configured. Supports 100+ exchanges.
 
 import ccxt
 import pandas as pd
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from bot import logger
 from config import settings
 
@@ -18,7 +18,64 @@ class ExchangeClient:
         self.connected = False
         self.paper_mode = False  # True when using public data, no real trades
 
-    def connect_public(self) -> bool:
+    def connect(self, exchange_id: str = None, api_key: str = None, api_secret: str = None) -> Tuple[bool, str]:
+        try:
+            eid    = exchange_id or self.exchange_id
+            key    = (api_key    or settings.api_key or "").strip()
+            secret = (api_secret or settings.api_secret or "").strip()
+
+            exchange_class = getattr(ccxt, eid)
+            self.exchange = exchange_class({
+                "apiKey": key,
+                "secret": secret,
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "spot",
+                    "recvWindow": 60000 
+                },
+            })
+            self.exchange.load_markets()
+            
+            # Verify keys if provided
+            if key and secret:
+                try:
+                    self.exchange.fetch_balance()
+                    self.paper_mode = False
+                    msg = "MEXC Wallet Connected (Live Trading)"
+                    logger.success(f"✅ {msg}")
+                    # Save credentials encrypted for next restart
+                    from bot.database import set_setting
+                    set_setting("api_credentials", {"id": eid, "key": key, "secret": secret}, encrypt=True)
+                    self.connected = True
+                    self.exchange_id = eid
+                    return True, msg
+                except Exception as e:
+                    self.connected = False
+                    err_msg = f"Key Verification Failed: {str(e)}"
+                    logger.error(f"❌ {err_msg}")
+                    return False, err_msg
+            else:
+                self.paper_mode = True
+                msg = f"Connected to {(eid or 'UNKNOWN').upper()} (Public/Paper Mode)"
+                logger.info(f"📊 {msg}")
+                self.connected = True
+                self.exchange_id = eid
+                return True, msg
+
+        except Exception as e:
+            self.connected = False
+            err_msg = f"Connection failed: {str(e)}"
+            logger.error(f"❌ {err_msg}")
+            return False, err_msg
+
+    def ensure_connected(self) -> bool:
+        """Auto-connect to public Binance if not already connected."""
+        if self.connected and self.exchange:
+            return True
+        success, _ = self.connect_public()
+        return success
+
+    def connect_public(self) -> Tuple[bool, str]:
         """Connect to Binance public API (no keys needed) for paper trading / analysis."""
         try:
             self.exchange = ccxt.binance({
@@ -28,47 +85,12 @@ class ExchangeClient:
             self.exchange.load_markets()
             self.connected = True
             self.paper_mode = True
-            logger.success(
-                "📊 Connected to Binance public API (Paper Trade mode) — "
-                "analysis fully active, NO real orders will be placed"
-            )
-            return True
+            msg = "Connected to Binance Public API (Paper mode)"
+            logger.success(f"📊 {msg}")
+            return True, msg
         except Exception as e:
             logger.error(f"Public API connection failed: {e}")
-            return False
-
-    def connect(self, exchange_id: str = None, api_key: str = None, api_secret: str = None) -> bool:
-        try:
-            eid    = exchange_id or self.exchange_id
-            key    = api_key    or settings.api_key
-            secret = api_secret or settings.api_secret
-
-            exchange_class = getattr(ccxt, eid)
-            self.exchange = exchange_class({
-                "apiKey": key,
-                "secret": secret,
-                "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
-            })
-            self.exchange.load_markets()
-            self.connected  = True
-            self.paper_mode = not bool(key)   # If no key → still paper mode
-            self.exchange_id = eid
-            logger.success(
-                f"✅ Connected to {eid.upper()} | Markets: {len(self.exchange.markets)} "
-                f"| Mode: {'Paper' if self.paper_mode else 'LIVE TRADING'}"
-            )
-            return True
-        except Exception as e:
-            self.connected = False
-            logger.error(f"Exchange connection failed [{eid}]: {e}")
-            return False
-
-    def ensure_connected(self) -> bool:
-        """Auto-connect to public Binance if not already connected."""
-        if self.connected and self.exchange:
-            return True
-        return self.connect_public()
+            return False, str(e)
 
     def get_supported_exchanges(self) -> List[str]:
         return ccxt.exchanges
@@ -141,21 +163,32 @@ class ExchangeClient:
             logger.error(f"Buy order failed [{symbol}]: {e}")
             return None
 
-    def create_market_sell(self, symbol: str, amount: float) -> Optional[Dict]:
+    def create_market_sell(self, symbol: str, amount: Optional[float] = None, amount_usdt: Optional[float] = None) -> Optional[Dict]:
+        if not amount and not amount_usdt:
+            return None
+            
         if self.paper_mode:
             ticker = self.fetch_ticker(symbol)
             price  = ticker.get("last", 0)
+            if not amount:
+                amount = amount_usdt / price if price else 0
             order  = {
                 "id": f"PAPER_{symbol.replace('/','')}_{pd.Timestamp.now().strftime('%H%M%S')}",
                 "symbol": symbol, "side": "sell", "type": "market",
                 "amount": amount, "price": price, "status": "closed", "paper": True
             }
-            logger.trade(f"📝 PAPER SELL [{symbol}] @ ${price:.2f}", order)
+            logger.trade(f"📝 PAPER SELL [{symbol}] @ ${price:.2f} | Amount: {amount:.6f}", order)
             return order
         try:
+            if not amount:
+                ticker = self.fetch_ticker(symbol)
+                price = ticker.get("last", 0)
+                if not price: return None
+                amount = amount_usdt / price
+                
             amount_str = self.exchange.amount_to_precision(symbol, amount)
             order = self.exchange.create_market_sell_order(symbol, float(amount_str))
-            logger.trade(f"🔴 LIVE SELL [{symbol}]", order)
+            logger.trade(f"🔴 LIVE SELL [{symbol}] @ ${order.get('price', 0)}", order)
             return order
         except Exception as e:
             logger.error(f"Sell order failed [{symbol}]: {e}")

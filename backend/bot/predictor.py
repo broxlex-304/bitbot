@@ -6,6 +6,7 @@ into a single confidence score and trade signal.
 """
 
 from typing import Dict, Any, Optional, Tuple, List
+import numpy as np
 from bot import logger
 
 
@@ -19,22 +20,38 @@ W_MICROSTR  = 0.10   # Order book bid/ask imbalance
 
 
 def _market_structure_score(orderbook: Optional[Dict]) -> Tuple[float, str]:
-    """Analyze bid/ask depth imbalance."""
+    """Analyze deep bid/ask liquidity with exponential distance decay."""
     if not orderbook:
         return 50.0, "NEUTRAL"
     bids = orderbook.get("bids", [])
     asks = orderbook.get("asks", [])
     if not bids or not asks:
         return 50.0, "NEUTRAL"
-    bid_vol = sum(b[1] for b in bids[:10])
-    ask_vol = sum(a[1] for a in asks[:10])
-    total = bid_vol + ask_vol
+        
+    mid_price = (bids[0][0] + asks[0][0]) / 2
+    
+    bid_pressure = 0.0
+    for price, vol in bids:
+        dist = abs(mid_price - price) / mid_price
+        # Weight decays exponentially as we go deeper into the book
+        weight = np.exp(-15 * dist) 
+        bid_pressure += vol * weight
+        
+    ask_pressure = 0.0
+    for price, vol in asks:
+        dist = abs(price - mid_price) / mid_price
+        weight = np.exp(-15 * dist)
+        ask_pressure += vol * weight
+        
+    total = bid_pressure + ask_pressure
     if total == 0:
         return 50.0, "NEUTRAL"
-    bid_pct = (bid_vol / total) * 100
-    if bid_pct >= 62:
+        
+    bid_pct = (bid_pressure / total) * 100
+    
+    if bid_pct >= 58:
         return round(bid_pct, 2), "BUY"
-    elif bid_pct <= 38:
+    elif bid_pct <= 42:
         return round(bid_pct, 2), "SELL"
     return round(bid_pct, 2), "NEUTRAL"
 
@@ -56,6 +73,10 @@ class Predictor:
 
     def __init__(self, confidence_threshold: float = 85.0):
         self.threshold = confidence_threshold
+        self.last_raw_score: Dict[str, float] = {} # Symbol-based smoothing state
+        self.smoothing_factor = 0.35 # Expert stable smoothing (0.0 to 1.0)
+        self.confirmation_counts: Dict[str, int] = {} # Counter for sustained signals
+        self.req_confirmations = 2 # Need 2 cycles of high confidence to trade
 
     def predict(
         self,
@@ -117,51 +138,133 @@ class Predictor:
         ml_score = (ml_results or {}).get("ml_score", 50.0)
         ml_dir   = (ml_results or {}).get("ml_direction", "NEUTRAL")
 
-        # ── 6. Weighted Fusion ─────────────────────────────────────────────────
-        raw_score = (
-            ml_score    * W_ML        +
-            ta_score    * W_TECHNICAL +
-            pat_score   * W_PATTERNS  +
-            sent_pct    * W_SENTIMENT +
-            mtf_score   * W_MOMENTUM  +
-            micro_score * W_MICROSTR
-        )
+        # ── 6. Weighted Fusion (Dynamic) ───────────────────────────────────────
+        # Expert Insight: Adjust weights based on market regime (ADX)
+        current_adx = regime.get("adx", 20)
+        
+        # In strong trends (High ADX), trust TA and Momentum more
+        if current_adx > 30:
+            W_TECH_EFF = W_TECHNICAL * 1.3
+            W_PAT_EFF  = W_PATTERNS * 1.1
+            W_SENT_EFF = W_SENTIMENT * 0.8 # News matters less in a runaway trend
+        # In ranging markets (Low ADX), trust Mean Reversion patterns and Sentiment more
+        else:
+            W_TECH_EFF = W_TECHNICAL * 0.8
+            W_PAT_EFF  = W_PATTERNS * 1.4
+            W_SENT_EFF = W_SENTIMENT * 1.2
+            
+        components = [
+            (ml_score,    W_ML,        ml_dir),
+            (ta_score,    W_TECH_EFF,  ta_dir),
+            (pat_score,   W_PAT_EFF,   pat_dir),
+            (sent_pct,    W_SENT_EFF,  sent_dir),
+            (mtf_score,   W_MOMENTUM,  mtf_dir),
+            (micro_score, W_MICROSTR,  micro_dir)
+        ]
+        
+        weighted_sum = 0.0
+        total_weight = 0.0
+        
+        for score, weight, direction in components:
+            # If component has a clear signal, boost its weight
+            effective_weight = weight
+            if direction != "NEUTRAL":
+                effective_weight *= 1.5 # 50% more weight to strong signals
+                
+            weighted_sum += score * effective_weight
+            total_weight += effective_weight
+            
+        raw_score = (weighted_sum / total_weight) if total_weight > 0 else 50.0
 
-        # ── 7. Direction Consensus Voting ──────────────────────────────────────
+        # ── 6d. Expert Smoothing (Stability Filter) ───────────────────────────
+        # This prevents the score from "fluctuating" too wildly between cycles
+        if symbol in self.last_raw_score:
+            prev = self.last_raw_score[symbol]
+            # EMA formula: current * alpha + previous * (1 - alpha)
+            raw_score = (raw_score * self.smoothing_factor) + (prev * (1 - self.smoothing_factor))
+            
+        self.last_raw_score[symbol] = raw_score
+
+        # ── 7. Direction Consensus Voting & Synergy ────────────────────────────
         directions = [ml_dir, ta_dir, pat_dir, sent_dir, mtf_dir, micro_dir]
         buy_votes  = directions.count("BUY")
         sell_votes = directions.count("SELL")
 
-        # Full consensus (4-5/5) → stronger boost
         if buy_votes >= 4:
-            raw_score = min(100, raw_score + 7)
             final_dir = "BUY"
+            consensus_boost = 10
         elif sell_votes >= 4:
-            raw_score = max(0, raw_score - 7)
             final_dir = "SELL"
+            consensus_boost = -10
         elif buy_votes >= 3:
-            raw_score = min(100, raw_score + 3)
             final_dir = "BUY"
+            consensus_boost = 5
         elif sell_votes >= 3:
-            raw_score = max(0, raw_score - 3)
             final_dir = "SELL"
+            consensus_boost = -5
         elif buy_votes > sell_votes:
             final_dir = "BUY"
+            consensus_boost = 0
         elif sell_votes > buy_votes:
             final_dir = "SELL"
+            consensus_boost = 0
         else:
             final_dir = "NEUTRAL"
+            consensus_boost = 0
+
+        # ── 6b. Volume Confirmation Expert Rule ────────────────────────────────
+        # A breakout or reversal without volume is a "fakeout"
+        vol_ratio = ta_results.get("volume", {}).get("ratio", 1.0)
+        if final_dir != "NEUTRAL" and vol_ratio < 0.8:
+            # Dampen confidence if volume is low
+            logger.warning(f"Low volume ({vol_ratio:.1f}x) detected for {final_dir} signal -> Dampening confidence")
+            raw_score = 50 + (raw_score - 50) * 0.6
+            
+        # Apply consensus boost
+        if final_dir == "BUY":
+            raw_score = min(100, raw_score + consensus_boost)
+        elif final_dir == "SELL":
+            raw_score = max(0, raw_score + consensus_boost)
+
+        # ── 6c. Confidence Sharpening (Sigmoid-like scaling) ───────────────────
+        # This pushes scores further away from the 50% neutral zone to make signals clearer
+        if abs(raw_score - 50) > 5:
+            # Shift towards the extremes
+            diff = raw_score - 50
+            # Scaling factor: stronger signals get pushed harder
+            sharpen = 1.3 if abs(diff) > 15 else 1.15
+            raw_score = 50 + (diff * sharpen)
+            raw_score = max(5, min(95, raw_score))
+            
+        # Synergy Boost: If ML and Technical agree, it's a very strong sign
+        if ml_dir != "NEUTRAL" and ml_dir == ta_dir:
+            if final_dir == ml_dir:
+                raw_score = min(100, raw_score + 5) if final_dir == "BUY" else max(0, raw_score - 5)
+                logger.success(f"Synergy detected: ML & TA alignment on {final_dir} -> +5% boost")
+                
+        # Regime Alignment Boost: If signal matches market trend, it's safer
+        current_regime = regime.get("regime", "")
+        if (final_dir == "BUY" and current_regime == "TRENDING_UP") or \
+           (final_dir == "SELL" and current_regime == "TRENDING_DOWN"):
+            raw_score = min(100, raw_score + 7) if final_dir == "BUY" else max(0, raw_score - 7)
+            logger.info(f"Regime Alignment: Signal {final_dir} matches {current_regime} -> +7% boost")
 
         # ── 8. Contradiction Penalties ─────────────────────────────────────────
         rsi_val = ta_results.get("rsi", {}).get("value", 50)
         penalty = 0.0
 
+        # Expert Insight: BTC Correlation Check
+        if symbol != "BTC/USDT":
+            if final_dir == "BUY" and current_regime == "TRENDING_DOWN":
+                penalty += 15
+                logger.warning(f"BTC Correlation Risk: Altcoin BUY signal during market downtrend -> −15% penalty")
+
         if final_dir == "BUY" and rsi_val > 80:
-            penalty += 8
-            logger.warning(f"RSI overbought ({rsi_val:.1f}) → BUY confidence penalised −8%")
+            penalty += 10
+            logger.warning(f"RSI overbought ({rsi_val:.1f}) → BUY confidence penalised −10%")
         elif final_dir == "SELL" and rsi_val < 20:
-            penalty += 8
-            logger.warning(f"RSI oversold ({rsi_val:.1f}) → SELL confidence penalised −8%")
+            penalty += 10
+            logger.warning(f"RSI oversold ({rsi_val:.1f}) → SELL confidence penalised −10%")
 
         # Divergence contradictions
         div = (pattern_results or {}).get("divergence", {})
@@ -180,6 +283,7 @@ class Predictor:
         # ── 8b. HTF Confirmation ──────────────────────────────────────────────
         atr_pct = ta_results.get("atr", {}).get("pct", 1.0)
         adx_val = regime.get("adx", 20)
+        htf_dir = "NEUTRAL"
 
         if ta_results_htf:
             htf_comp = ta_results_htf.get("composite", {})
@@ -201,8 +305,33 @@ class Predictor:
             penalty += 5
             logger.warning(f"Weak trend (ADX {adx_val:.1f}) → −5% confidence")
 
-        confidence = round(max(0, min(98.0, raw_score - penalty)), 2)
-        should_trade = confidence >= self.threshold and final_dir in ("BUY", "SELL")
+        # ── 8e. Directional Confidence Calculation ───────────────────────────
+        # Expert Logic: Confidence should represent strength of conviction in the CURRENT direction.
+        if final_dir == "BUY":
+            # For BUY, higher raw_score means higher confidence
+            base_confidence = raw_score
+        elif final_dir == "SELL":
+            # For SELL, lower raw_score means higher confidence in the downward move
+            base_confidence = 100 - raw_score
+        else:
+            base_confidence = 0
+            
+        confidence = round(max(0, min(98.0, base_confidence - penalty)), 2)
+        
+        # ── 8f. Expert Confirmation Buffer ────────────────────────────────────
+        # Only trade if high confidence is SUSTAINED for multiple cycles
+        potential_signal = confidence >= self.threshold and final_dir in ("BUY", "SELL")
+        
+        if potential_signal:
+            self.confirmation_counts[symbol] = self.confirmation_counts.get(symbol, 0) + 1
+        else:
+            self.confirmation_counts[symbol] = 0 # Reset if signal drops
+            
+        # Actual trade decision
+        should_trade = potential_signal and self.confirmation_counts[symbol] >= self.req_confirmations
+        
+        if potential_signal and not should_trade:
+            logger.info(f"Signal Pending: Sustaining conviction... ({self.confirmation_counts[symbol]}/{self.req_confirmations})")
 
         # ── 9. Adaptive Risk Parameters ────────────────────────────────────────
         # Tighter SL in strong trends, wider in weaker ones
@@ -215,14 +344,31 @@ class Predictor:
         if ml_dir != "NEUTRAL":
             reasoning.append(f"AI ML: {ml_dir} signal (Random Forest probability: {ml_score:.1f}%)")
         if ta_dir != "NEUTRAL":
-            reasoning.append(f"TA: {ta_dir} signal ({ta_score:.0f}% score, {comp.get('bull_signals',0)}↑/{comp.get('bear_signals',0)}↓)")
+            reasoning.append(f"TA Composite: {ta_dir} signal ({ta_score:.0f}% score)")
+            
+        ema = ta_results.get("ema", {})
+        if ema:
+            ema_trend = "Bullish" if ema.get("price", 0) > ema.get("ema50", float('inf')) else "Bearish"
+            reasoning.append(f"Trend Indicator (EMA50): {ema_trend} (Price vs Moving Average)")
+            
+        macd = ta_results.get("macd", {})
+        if macd:
+            macd_state = "Bullish Cross" if macd.get("macd", 0) > macd.get("signal", 0) else "Bearish Cross"
+            reasoning.append(f"Momentum Indicator (MACD): {macd_state}")
+            
+        rsi_val = ta_results.get("rsi", {}).get("value", 50)
+        if rsi_val > 70:
+            reasoning.append(f"Overbought Warning (RSI): {rsi_val:.1f} - High risk of reversal")
+        elif rsi_val < 30:
+            reasoning.append(f"Oversold Opportunity (RSI): {rsi_val:.1f} - Undervalued conditions")
+            
         if pat_dir != "NEUTRAL":
             reasoning.append(f"Patterns: {pat_dir} — Regime: {regime.get('regime','?')} ADX {regime.get('adx',0):.1f}")
         bb = ta_results.get("bollinger", {})
         if bb.get("is_squeeze"):
-            reasoning.append("Volatility: BB Squeeze detected (breakout imminent)")
+            reasoning.append("Volatility Squeeze (Bollinger Bands): Breakout imminent")
         if htf_dir == final_dir and final_dir != "NEUTRAL":
-            reasoning.append(f"Confirmation: Higher Timeframe ({htf_dir}) aligns with signal")
+            reasoning.append(f"Institutional Confirmation: Higher Timeframe ({htf_dir}) aligns with signal")
         fib = (pattern_results or {}).get("fibonacci", {})
         if fib.get("at_support"):
             reasoning.append(f"At Fibonacci support ({fib.get('nearest_fib',0)*100:.1f}% level)")
@@ -235,16 +381,41 @@ class Predictor:
             reasoning.append("RSI Bullish Divergence detected ↗")
         if div.get("bearish_divergence"):
             reasoning.append("RSI Bearish Divergence detected ↘")
+            
+        wyckoff = (pattern_results or {}).get("wyckoff", {})
+        if wyckoff.get("phase") in ["ACCUMULATION", "DISTRIBUTION"]:
+            reasoning.append(f"Wyckoff Phase: {wyckoff.get('phase')} (Conf: {wyckoff.get('confidence', 0)*100:.0f}%)")
+            
+        elliott = (pattern_results or {}).get("elliott", {})
+        if elliott.get("trend") != "NEUTRAL":
+            reasoning.append(f"Elliott Wave: {elliott.get('trend')} (Wave {elliott.get('wave', 0)})")
+            
+        sweeps = (pattern_results or {}).get("liquidity_sweeps", [])
+        if sweeps:
+            reasoning.append(f"Liquidity Sweep: {sweeps[-1]['type']} at ${sweeps[-1]['price']:.2f}")
+
+        trix = ta_results.get("trix", {})
+        if trix:
+            reasoning.append(f"TRIX Momentum: {'Bullish' if trix.get('value', 0) > 0 else 'Bearish'} ({trix.get('value', 0):.2f})")
+            
+        uo = ta_results.get("ultimate_oscillator", {})
+        if uo:
+            reasoning.append(f"Ultimate Oscillator: {uo.get('value', 50):.1f}")
+            
         if sent_dir != "NEUTRAL":
-            reasoning.append(f"Sentiment: {sent_dir} ({sent_pct:.0f}%)")
+            if sent_dir == "POSITIVE":
+                reasoning.append(f"News Sentiment: POSITIVE ({sent_pct:.0f}%) -> Macro narrative strongly supports UPWARD price discovery.")
+            else:
+                reasoning.append(f"News Sentiment: NEGATIVE ({sent_pct:.0f}%) -> Macro narrative warns of potential DOWNSIDE CRASH risk.")
+                
         if mtf_dir != "NEUTRAL":
-            reasoning.append(f"Multi-timeframe: {mtf_dir} ({mtf_score:.0f}%)")
+            reasoning.append(f"Multi-Timeframe Engine: {mtf_dir} agreement ({mtf_score:.0f}%)")
         candle_patterns = ta_results.get("candle_patterns", [])
         if candle_patterns:
-            reasoning.append(f"Candle patterns: {', '.join(candle_patterns)}")
+            reasoning.append(f"Candlestick Patterns: {', '.join(candle_patterns)}")
         ichi = ta_results.get("ichimoku", {})
         if ichi.get("tenkan", 0) > ichi.get("kijun", 1):
-            reasoning.append("Ichimoku: Tenkan > Kijun (bullish cross)")
+            reasoning.append("Ichimoku Cloud: Tenkan > Kijun (bullish cross formation)")
 
         result = {
             "symbol":            symbol,

@@ -118,6 +118,27 @@ def _pivot_points(df: pd.DataFrame) -> Dict[str, float]:
         "s2": pp - (prev["high"] - prev["low"]),
     }
 
+def _keltner_channels(df: pd.DataFrame, period: int = 20, atr_multiplier: float = 2.0):
+    ema = _ema(df["close"], period)
+    atr = _atr(df, period).fillna(0)
+    upper = ema + (atr_multiplier * atr)
+    lower = ema - (atr_multiplier * atr)
+    return upper, ema, lower
+
+def _trix(series: pd.Series, period: int = 15) -> pd.Series:
+    ema1 = _ema(series, period)
+    ema2 = _ema(ema1, period)
+    ema3 = _ema(ema2, period)
+    return ((ema3 - ema3.shift(1)) / (ema3.shift(1) + 1e-9) * 10000).fillna(0)
+
+def _ultimate_oscillator(df: pd.DataFrame) -> pd.Series:
+    bp = df["close"] - pd.concat([df["low"], df["close"].shift(1)], axis=1).min(axis=1)
+    tr = pd.concat([df["high"], df["close"].shift(1)], axis=1).max(axis=1) - pd.concat([df["low"], df["close"].shift(1)], axis=1).min(axis=1)
+    avg7 = bp.rolling(7).sum() / (tr.rolling(7).sum() + 1e-9)
+    avg14 = bp.rolling(14).sum() / (tr.rolling(14).sum() + 1e-9)
+    avg28 = bp.rolling(28).sum() / (tr.rolling(28).sum() + 1e-9)
+    return (100 * ((4 * avg7) + (2 * avg14) + avg28) / 7).fillna(50)
+
 def _detect_candlestick_patterns(df: pd.DataFrame) -> List[str]:
     patterns = []
     last = df.iloc[-1]
@@ -155,6 +176,38 @@ def _detect_candlestick_patterns(df: pd.DataFrame) -> List[str]:
         if (p3["close"] < p3["open"] and abs(prev["close"] - prev["open"]) < 0.3 * abs(p3["close"] - p3["open"])
                 and last["close"] > last["open"] and last["close"] > (p3["open"] + p3["close"]) / 2):
             patterns.append("Morning Star (Bullish)")
+
+    # Three White Soldiers (simplified)
+    if len(df) >= 4:
+        p3 = df.iloc[-3]
+        if (p3["close"] > p3["open"] and prev["close"] > prev["open"] and last["close"] > last["open"] and
+            prev["close"] > p3["close"] and last["close"] > prev["close"] and
+            p3["open"] < prev["open"] and prev["open"] < last["open"]):
+            patterns.append("Three White Soldiers (Bullish)")
+
+    # Three Black Crows (simplified)
+    if len(df) >= 4:
+        p3 = df.iloc[-3]
+        if (p3["close"] < p3["open"] and prev["close"] < prev["open"] and last["close"] < last["open"] and
+            prev["close"] < p3["close"] and last["close"] < prev["close"] and
+            p3["open"] > prev["open"] and prev["open"] > last["open"]):
+            patterns.append("Three Black Crows (Bearish)")
+
+    # Marubozu
+    std_val = df["close"].rolling(20).std().iloc[-1]
+    if body > 0.9 * total and total > (std_val if not pd.isna(std_val) else 0):
+        if last["close"] > last["open"]:
+            patterns.append("Bullish Marubozu")
+        else:
+            patterns.append("Bearish Marubozu")
+
+    # Tweezer Bottom
+    if abs(last["low"] - prev["low"]) / (last["close"] + 1e-9) < 0.001 and prev["close"] < prev["open"] and last["close"] > last["open"]:
+        patterns.append("Tweezer Bottom (Bullish)")
+        
+    # Tweezer Top
+    if abs(last["high"] - prev["high"]) / (last["close"] + 1e-9) < 0.001 and prev["close"] > prev["open"] and last["close"] < last["open"]:
+        patterns.append("Tweezer Top (Bearish)")
 
     return patterns
 
@@ -320,24 +373,55 @@ class TechnicalAnalyzer:
             if signals and signals[-1] == 1: signals.append(1)
             elif signals and signals[-1] == -1: signals.append(-1)
 
-        # ── Candlestick Patterns ───────────────────────────────────────────────
-        candle_patterns = _detect_candlestick_patterns(df)
-        results["candle_patterns"] = candle_patterns
-        for p in candle_patterns:
-            if "Bullish" in p or "Hammer" in p or "Morning" in p: signals.append(1)
-            elif "Bearish" in p or "Shooting" in p or "Evening" in p: signals.append(-1)
+        # ── Keltner Channels ───────────────────────────────────────────────────
+        kc_u, kc_m, kc_l = _keltner_channels(df)
+        kcu, kcm, kcl = kc_u.iloc[-1], kc_m.iloc[-1], kc_l.iloc[-1]
+        results["keltner"] = {"upper": kcu, "middle": kcm, "lower": kcl}
+        if price > kcu: signals.extend([1, 1])  # Breakout upside
+        elif price < kcl: signals.extend([-1, -1])  # Breakout downside
+        elif price > kcm: signals.append(1)
+        elif price < kcm: signals.append(-1)
+        else: signals.append(0)
+
+        # ── TRIX ───────────────────────────────────────────────────────────────
+        trix_s = _trix(close)
+        trix_val = trix_s.iloc[-1]
+        trix_prev = trix_s.iloc[-2]
+        results["trix"] = {"value": trix_val}
+        if trix_val > 0 and trix_val > trix_prev: signals.append(1)
+        elif trix_val < 0 and trix_val < trix_prev: signals.append(-1)
+        elif trix_val > 0: signals.append(1)
+        elif trix_val < 0: signals.append(-1)
+
+        # ── Ultimate Oscillator ────────────────────────────────────────────────
+        uo = _ultimate_oscillator(df).iloc[-1]
+        results["ultimate_oscillator"] = {"value": uo}
+        if uo > 70: signals.extend([-1, -1])  # Overbought
+        elif uo < 30: signals.extend([1, 1])  # Oversold
+        elif uo > 50: signals.append(1)
+        elif uo < 50: signals.append(-1)
 
         # ── Composite Score ────────────────────────────────────────────────────
-        total = len(signals)
-        bull_count = signals.count(1)
-        bear_count = signals.count(-1)
-        net = bull_count - bear_count
-        # Score: 0–100
-        score = ((bull_count / total) * 100) if total > 0 else 50.0
+        # Technical signals summary
+        total_weight = len(signals) if 'signals' in locals() else 0
+        bull_weight = signals.count(1) if 'signals' in locals() else 0
+        bear_weight = signals.count(-1) if 'signals' in locals() else 0
+        
+        # Add extra weight for high-conviction states
+        if rsi_val < 25 or rsi_val > 75: bull_weight += 0.5; bear_weight += 0.5; total_weight += 1
+        if is_squeeze: total_weight += 1 # Squeeze increases the importance of other signals
+        
+        # Score: 0–100 (centered at 50)
+        score = ((bull_weight / total_weight) * 100) if total_weight > 0 else 50.0
+        
+        # Sharpening: If it's a clear trend, push it further
+        if abs(score - 50) > 10:
+            score = 50 + (score - 50) * 1.15
+            score = max(0, min(100, score))
 
-        if score >= 65:
+        if score >= 60: # Lowered threshold slightly to be more responsive
             direction = "BUY"
-        elif score <= 35:
+        elif score <= 40:
             direction = "SELL"
         else:
             direction = "NEUTRAL"
@@ -345,16 +429,15 @@ class TechnicalAnalyzer:
         results["composite"] = {
             "score": round(score, 2),
             "direction": direction,
-            "bull_signals": bull_count,
-            "bear_signals": bear_count,
-            "neutral_signals": total - bull_count - bear_count,
-            "total_signals": total,
+            "bull_signals": bull_weight,
+            "bear_signals": bear_weight,
+            "neutral_signals": total_weight - bull_weight - bear_weight,
+            "total_signals": total_weight,
         }
 
         logger.analysis(
             f"TA complete [{symbol}] → {direction} | Score: {score:.1f}% "
-            f"| RSI: {rsi_val:.1f} | MACD: {'▲' if macd_curr > macd_sig else '▼'} "
-            f"| Patterns: {candle_patterns or 'none'}",
+            f"| RSI: {rsi_val:.1f} | MACD: {'▲' if macd_curr > macd_sig else '▼'} ",
             {"symbol": symbol, "score": score, "direction": direction}
         )
 

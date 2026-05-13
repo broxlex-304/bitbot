@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     api_secret: str = ""
 
     # Trading
-    default_symbol: str = "BTC/USDT"
-    default_timeframe: str = "15m"
+    symbol: str = "BTC/USDT"
+    timeframe: str = "15m"
     trade_amount_usdt: float = 10.0
     max_open_trades: int = 3
     confidence_threshold: float = 85.0
@@ -26,9 +26,14 @@ class Settings(BaseSettings):
     debug: bool = True
     frontend_url: str = "http://localhost:3000"
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    # Telegram Alerts
+    telegram_token: str = "8309156047:AAEapWWNwWQY_vcnYXaMoblyXxLph8qk_UA"
+    telegram_chat_id: str = "1788255388"
+    
+    # Database
+    database_url: str = "sqlite:///bitbot.db"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()

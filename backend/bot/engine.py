@@ -12,6 +12,7 @@ from bot import logger
 from bot.analyzer import TechnicalAnalyzer
 from bot.predictor import Predictor
 from bot.patterns import pattern_engine
+from bot.database import set_setting, get_setting
 from bot.ml import ml_engine
 from bot.news import news_analyzer
 from bot.exchange import exchange_client
@@ -54,13 +55,13 @@ class TradingEngine:
     def __init__(self):
         self.status: BotStatus = BotStatus.IDLE
         self.status_message: str = "Bot is idle"
-        self.symbol: str = settings.default_symbol
-        self.timeframe: str = settings.default_timeframe
+        self.symbol    = get_setting("symbol", settings.symbol)
+        self.timeframe = get_setting("timeframe", settings.timeframe)
         self.running: bool = False
         self._task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
         self.analyzer = TechnicalAnalyzer()
-        self.predictor = Predictor(confidence_threshold=settings.confidence_threshold)
+        self.predictor = Predictor(confidence_threshold=get_setting("confidence_threshold", settings.confidence_threshold))
         self.cycle_count: int = 0
         self.last_analysis: Dict[str, Any] = {}
         self.last_prediction: Dict[str, Any] = {}
@@ -124,17 +125,26 @@ class TradingEngine:
     def update_settings(self, **kwargs):
         if "symbol" in kwargs:
             self.symbol = kwargs["symbol"]
+            set_setting("symbol", self.symbol)
         if "timeframe" in kwargs:
             self.timeframe = kwargs["timeframe"]
+            set_setting("timeframe", self.timeframe)
         if "confidence_threshold" in kwargs:
             self.predictor.threshold = float(kwargs["confidence_threshold"])
+            set_setting("confidence_threshold", self.predictor.threshold)
         if "trade_amount_usdt" in kwargs:
             settings.trade_amount_usdt = float(kwargs["trade_amount_usdt"])
+            set_setting("trade_amount_usdt", settings.trade_amount_usdt)
         if "stop_loss_percent" in kwargs:
             settings.stop_loss_percent = float(kwargs["stop_loss_percent"])
+            set_setting("stop_loss_percent", settings.stop_loss_percent)
         if "take_profit_percent" in kwargs:
             settings.take_profit_percent = float(kwargs["take_profit_percent"])
-        logger.info(f"Settings updated: {kwargs}")
+            set_setting("take_profit_percent", settings.take_profit_percent)
+        if "max_open_trades" in kwargs:
+            settings.max_open_trades = int(kwargs["max_open_trades"])
+            set_setting("max_open_trades", settings.max_open_trades)
+        logger.info(f"Settings updated and saved to DB: {kwargs}")
 
     # ─── Main Loop ────────────────────────────────────────────────────────────
 
@@ -210,9 +220,9 @@ class TradingEngine:
         news_data = await news_analyzer.analyze(self.symbol)
 
         # ── 4. Order Book Microstructure ─────────────────────────────────────
-        logger.analysis("Fetching order book microstructure...")
+        logger.analysis("Fetching deep order book microstructure...")
         orderbook = await asyncio.get_event_loop().run_in_executor(
-            None, exchange_client.fetch_orderbook, self.symbol, 20
+            None, exchange_client.fetch_orderbook, self.symbol, 100
         )
 
         # ── 4b. Advanced Pattern Analysis ────────────────────────────────────
@@ -264,6 +274,9 @@ class TradingEngine:
             tp_pct      = prediction["take_profit_pct"]
             amount_usdt = settings.trade_amount_usdt
 
+            # Expert Logic: Get ATR for volatility-adjusted risk
+            atr_val = ta_primary.get("atr", {}).get("value")
+            
             logger.trade(
                 f"🎯 HIGH CONFIDENCE SIGNAL! {direction} @ {current_price} "
                 f"| Confidence: {confidence}% | Executing trade..."
@@ -274,8 +287,11 @@ class TradingEngine:
                 order = await asyncio.get_event_loop().run_in_executor(
                     None, exchange_client.create_market_buy, self.symbol, amount_usdt
                 )
-            # Note: for spot trading, SELL only makes sense if we have a position
-            # For futures/margin, this would be a short
+            elif direction == "SELL":
+                # Expert: Handle SHORT (passing amount_usdt specifically)
+                order = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: exchange_client.create_market_sell(self.symbol, amount_usdt=amount_usdt)
+                )
 
             if order:
                 pos = risk_manager.open_position(
@@ -286,6 +302,7 @@ class TradingEngine:
                     stop_loss_pct=sl_pct,
                     take_profit_pct=tp_pct,
                     confidence=confidence,
+                    atr=atr_val,
                     order_id=order.get("id", ""),
                 )
                 if pos:
@@ -398,6 +415,7 @@ class TradingEngine:
             "stats":          risk_manager.get_stats(),
             "exchange":       exchange_client.exchange_id,
             "exchange_connected": exchange_client.connected,
+            "paper_mode":         exchange_client.paper_mode,
         }
 
 

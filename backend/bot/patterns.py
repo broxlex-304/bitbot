@@ -223,6 +223,220 @@ def detect_order_blocks(df: pd.DataFrame, lookback: int = 30) -> List[Dict]:
     return blocks[-4:]  # Return last 4 blocks
 
 
+# ─── Smart Money Concepts (SMC) & ICT ─────────────────────────────────────────
+
+def detect_fair_value_gaps(df: pd.DataFrame) -> List[Dict]:
+    """Detect ICT Fair Value Gaps (FVG) / Imbalances."""
+    fvgs = []
+    data = df.tail(50)
+    for i in range(1, len(data) - 1):
+        # Bullish FVG: Low of candle 3 > High of candle 1
+        # (Candle 2 created a gap)
+        c1 = data.iloc[i-1]
+        c2 = data.iloc[i]
+        c3 = data.iloc[i+1]
+        
+        if c3["low"] > c1["high"]:
+            fvgs.append({
+                "type": "bullish",
+                "top": float(c3["low"]),
+                "bottom": float(c1["high"]),
+                "index": i,
+                "status": "unfilled" if df["close"].iloc[-1] > c3["low"] else "filled"
+            })
+        # Bearish FVG: High of candle 3 < Low of candle 1
+        elif c3["high"] < c1["low"]:
+            fvgs.append({
+                "type": "bearish",
+                "top": float(c1["low"]),
+                "bottom": float(c3["high"]),
+                "index": i,
+                "status": "unfilled" if df["close"].iloc[-1] < c3["high"] else "filled"
+            })
+    return fvgs[-4:]
+
+def detect_market_structure(df: pd.DataFrame) -> Dict[str, Any]:
+    """Detect Break of Structure (BOS) and Change of Character (CHoCH)."""
+    data = df.tail(100)
+    highs = data["high"].rolling(5, center=True).max()
+    lows  = data["low"].rolling(5, center=True).min()
+    
+    # Simple BOS detection: Price closing above recent swing high
+    recent_high = data["high"].iloc[-20:-5].max()
+    recent_low  = data["low"].iloc[-20:-5].min()
+    price = data["close"].iloc[-1]
+    
+    bos_bull = price > recent_high
+    bos_bear = price < recent_low
+    
+    structure = "NEUTRAL"
+    if bos_bull: structure = "BOS_BULLISH"
+    elif bos_bear: structure = "BOS_BEARISH"
+    
+    return {
+        "structure": structure,
+        "recent_high": float(recent_high),
+        "recent_low": float(recent_low),
+        "is_bos": bos_bull or bos_bear
+    }
+
+def detect_liquidity_sweeps(df: pd.DataFrame, lookback: int = 20) -> List[Dict]:
+    """Detect when price wicks past a recent high/low but closes inside, trapping liquidity."""
+    sweeps = []
+    data = df.tail(lookback * 2).reset_index(drop=True)
+    if len(data) < 10:
+        return []
+    
+    for i in range(len(data) - 5, len(data)):
+        candle = data.iloc[i]
+        prev_data = data.iloc[max(0, i - lookback):i]
+        recent_high = prev_data["high"].max()
+        recent_low = prev_data["low"].min()
+        
+        # Bullish sweep: wick below recent low, close above it
+        if candle["low"] < recent_low and min(candle["close"], candle["open"]) > recent_low:
+            sweeps.append({"type": "bullish_sweep", "price": float(candle["low"]), "index": i})
+            
+        # Bearish sweep: wick above recent high, close below it
+        if candle["high"] > recent_high and max(candle["close"], candle["open"]) < recent_high:
+            sweeps.append({"type": "bearish_sweep", "price": float(candle["high"]), "index": i})
+            
+    return sweeps[-3:]
+
+def detect_wyckoff_phases(df: pd.DataFrame) -> Dict[str, Any]:
+    """Basic detection of Wyckoff Accumulation/Distribution using Volume + Price action."""
+    data = df.tail(50)
+    avg_vol = data["volume"].mean()
+    high_vol_candles = data[data["volume"] > avg_vol * 2.5]
+    
+    if high_vol_candles.empty:
+        return {"phase": "UNKNOWN", "confidence": 0}
+        
+    last_climax = high_vol_candles.iloc[-1]
+    is_down_climax = last_climax["close"] < last_climax["open"]
+    
+    subsequent = data.loc[last_climax.name:]
+    if is_down_climax and len(subsequent) > 3:
+        if subsequent["low"].min() >= last_climax["low"] * 0.99 and subsequent["volume"].mean() < last_climax["volume"]:
+            return {"phase": "ACCUMULATION", "confidence": 0.7}
+            
+    if not is_down_climax and len(subsequent) > 3:
+        if subsequent["high"].max() <= last_climax["high"] * 1.01 and subsequent["volume"].mean() < last_climax["volume"]:
+            return {"phase": "DISTRIBUTION", "confidence": 0.7}
+            
+    return {"phase": "UNKNOWN", "confidence": 0}
+
+def detect_elliott_wave(df: pd.DataFrame) -> Dict[str, Any]:
+    """Simplified Elliott Wave pattern detection using swing points."""
+    data = df.tail(100)
+    highs = data["high"].rolling(5, center=True).max()
+    lows  = data["low"].rolling(5, center=True).min()
+    
+    swing_highs = data[data["high"] == highs]
+    swing_lows = data[data["low"] == lows]
+    
+    if len(swing_highs) < 3 or len(swing_lows) < 3:
+        return {"trend": "NEUTRAL", "wave": 0}
+        
+    last_3_highs = swing_highs["high"].iloc[-3:].values
+    last_2_lows = swing_lows["low"].iloc[-2:].values
+    
+    if (len(last_3_highs) == 3 and len(last_2_lows) >= 2 and 
+        last_3_highs[0] < last_3_highs[1] < last_3_highs[2] and
+        last_2_lows[0] < last_2_lows[1]):
+        return {"trend": "BULLISH_IMPULSE", "wave": 5}
+        
+    if (len(last_3_highs) >= 2 and len(last_2_lows) == 3 and 
+        last_2_lows[0] > last_2_lows[1] > last_2_lows[2] and
+        last_3_highs[0] > last_3_highs[1]):
+        return {"trend": "BEARISH_IMPULSE", "wave": 5}
+        
+    return {"trend": "NEUTRAL", "wave": 0}
+
+# ─── Candlestick Pattern Engine ────────────────────────────────────────────────
+def detect_candlestick_patterns(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Expert-level candlestick detection.
+    Returns: { 'patterns': List[str], 'score': float (-1 to 1) }
+    """
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    p3   = df.iloc[-3] if len(df) >= 3 else prev
+    
+    body = abs(last["close"] - last["open"])
+    prev_body = abs(prev["close"] - prev["open"])
+    total = last["high"] - last["low"]
+    upper_shadow = last["high"] - max(last["close"], last["open"])
+    lower_shadow = min(last["close"], last["open"]) - last["low"]
+    
+    found = []
+    score = 0.0
+    
+    # 1. Doji
+    if body <= 0.1 * total:
+        if lower_shadow > 3 * body and upper_shadow < body:
+            found.append("Dragonfly Doji (Bullish)")
+            score += 0.4
+        elif upper_shadow > 3 * body and lower_shadow < body:
+            found.append("Gravestone Doji (Bearish)")
+            score -= 0.4
+        else:
+            found.append("Doji (Neutral)")
+
+    # 2. Engulfing
+    if prev_body > 0:
+        if last["close"] > last["open"] and prev["close"] < prev["open"] and \
+           last["close"] > prev["open"] and last["open"] < prev["close"]:
+            found.append("Bullish Engulfing")
+            score += 1.0
+        elif last["close"] < last["open"] and prev["close"] > prev["open"] and \
+             last["close"] < prev["open"] and last["open"] > prev["close"]:
+            found.append("Bearish Engulfing")
+            score -= 1.0
+
+    # 3. Hammer & Hanging Man
+    if lower_shadow > 2 * body and upper_shadow < 0.2 * body:
+        if last["close"] > last["open"]: # Bullish context
+            found.append("Hammer (Bullish)")
+            score += 0.6
+        else:
+            found.append("Hanging Man (Bearish)")
+            score -= 0.6
+
+    # 4. Shooting Star & Inverted Hammer
+    if upper_shadow > 2 * body and lower_shadow < 0.2 * body:
+        if last["close"] < last["open"]: # Bearish context
+            found.append("Shooting Star (Bearish)")
+            score -= 0.6
+        else:
+            found.append("Inverted Hammer (Bullish)")
+            score += 0.6
+
+    # 5. Morning & Evening Star
+    if len(df) >= 3:
+        # Morning Star: Bearish -> small body -> Bullish
+        if p3["close"] < p3["open"] and abs(prev["close"] - prev["open"]) < 0.3 * abs(p3["close"] - p3["open"]) and \
+           last["close"] > last["open"] and last["close"] > (p3["open"] + p3["close"]) / 2:
+            found.append("Morning Star (Bullish)")
+            score += 1.2
+        # Evening Star: Bullish -> small body -> Bearish
+        elif p3["close"] > p3["open"] and abs(prev["close"] - prev["open"]) < 0.3 * abs(p3["close"] - p3["open"]) and \
+             last["close"] < last["open"] and last["close"] < (p3["open"] + p3["close"]) / 2:
+            found.append("Evening Star (Bearish)")
+            score -= 1.2
+
+    # 6. Harami
+    if body < 0.3 * prev_body:
+        if last["close"] > last["open"] and prev["close"] < prev["open"]:
+            found.append("Bullish Harami")
+            score += 0.5
+        elif last["close"] < last["open"] and prev["close"] > prev["open"]:
+            found.append("Bearish Harami")
+            score -= 0.5
+
+    return {"patterns": found, "score": score}
+
+
 # ─── Trend Strength (ADX Direction) ──────────────────────────────────────────
 
 def trend_strength_score(regime: Dict) -> Tuple[float, int]:
@@ -260,8 +474,38 @@ class PatternEngine:
         divergence= detect_divergence(df)
         ob_blocks = detect_order_blocks(df)
         ts_score, ts_signal = trend_strength_score(regime)
-
+        candles   = detect_candlestick_patterns(df)
+        fvgs      = detect_fair_value_gaps(df)
+        structure = detect_market_structure(df)
+        sweeps    = detect_liquidity_sweeps(df)
+        wyckoff   = detect_wyckoff_phases(df)
+        elliott   = detect_elliott_wave(df)
+        
         signals: List[int] = []
+        price = df["close"].iloc[-1]
+
+        # Liquidity Sweeps
+        for sweep in sweeps:
+            if sweep["type"] == "bullish_sweep": signals.extend([1, 1])
+            elif sweep["type"] == "bearish_sweep": signals.extend([-1, -1])
+
+        # Wyckoff
+        if wyckoff["phase"] == "ACCUMULATION": signals.extend([1, 1, 1])
+        elif wyckoff["phase"] == "DISTRIBUTION": signals.extend([-1, -1, -1])
+
+        # Elliott Wave
+        if elliott["trend"] == "BULLISH_IMPULSE": signals.extend([1, 1])
+        elif elliott["trend"] == "BEARISH_IMPULSE": signals.extend([-1, -1])
+
+        # Market Structure (BOS)
+        if structure["structure"] == "BOS_BULLISH": signals.extend([1, 1])
+        elif structure["structure"] == "BOS_BEARISH": signals.extend([-1, -1])
+
+        # FVG (Imbalances)
+        for fvg in fvgs:
+            if fvg["status"] == "unfilled":
+                if fvg["type"] == "bullish" and price <= fvg["top"]: signals.append(1)
+                elif fvg["type"] == "bearish" and price >= fvg["bottom"]: signals.append(-1)
 
         # Regime signals
         if regime["regime"] == "TRENDING_UP":   signals.extend([1, 1])
@@ -287,12 +531,15 @@ class PatternEngine:
         elif ts_signal == -1: signals.append(-1)
 
         # Order block signals
-        price = df["close"].iloc[-1]
         for ob in ob_blocks:
             if ob["type"] == "demand" and ob["bottom"] <= price <= ob["top"] * 1.01:
-                signals.extend([1, 1])
+                signals.extend([1, 1, 1])
             elif ob["type"] == "supply" and ob["bottom"] * 0.99 <= price <= ob["top"]:
-                signals.extend([-1, -1])
+                signals.extend([-1, -1, -1])
+
+        # Candlestick signals
+        if candles["score"] >= 0.5: signals.extend([1] * int(candles["score"] * 2))
+        elif candles["score"] <= -0.5: signals.extend([-1] * int(abs(candles["score"]) * 2))
 
         total = len(signals)
         bull  = signals.count(1)
@@ -305,7 +552,11 @@ class PatternEngine:
             "volume_profile": vol_prof,
             "divergence": divergence,
             "order_blocks": ob_blocks,
+            "candlesticks": candles,
             "trend_strength": {"score": ts_score, "signal": ts_signal},
+            "liquidity_sweeps": sweeps,
+            "wyckoff": wyckoff,
+            "elliott": elliott,
             "composite": {
                 "score": round(score, 2),
                 "direction": "BUY" if score >= 60 else ("SELL" if score <= 40 else "NEUTRAL"),
@@ -317,8 +568,7 @@ class PatternEngine:
 
         logger.analysis(
             f"Patterns [{symbol}]: Regime={regime['regime']} | ADX={regime['adx']:.1f} | "
-            f"FibNearest={fibonacci.get('nearest_fib','-')} | "
-            f"BullDiv={divergence['bullish_divergence']} | BearDiv={divergence['bearish_divergence']} | "
+            f"Candles={', '.join(candles['patterns']) if candles['patterns'] else 'none'} | "
             f"Score={score:.1f}%"
         )
         return result

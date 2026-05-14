@@ -2,7 +2,21 @@
 import { useEffect, useRef } from 'react';
 import { useStore } from '@/lib/store';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
+const getWsUrl = () => {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (apiUrl.startsWith('https://')) return apiUrl.replace('https://', 'wss://') + '/ws';
+    if (apiUrl.startsWith('http://')) return apiUrl.replace('http://', 'ws://') + '/ws';
+  }
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
+  }
+  return 'ws://localhost:8000/ws';
+};
+
+const WS_URL = getWsUrl();
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);

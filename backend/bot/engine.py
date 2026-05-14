@@ -354,16 +354,21 @@ class TradingEngine:
                 if not self.running:
                     break
 
-                # Fetch last 2 candles to ensure we have the most recent closed and open one
+                # Fetch Ticker (Last Price) for absolute 0ms precision
+                ticker = await asyncio.get_event_loop().run_in_executor(
+                    None, exchange_client.fetch_ticker, self.symbol
+                )
+                price = ticker.get("last", 0)
+                
+                # Fetch last candle for technical sync
                 df = await asyncio.get_event_loop().run_in_executor(
-                    None, exchange_client.fetch_ohlcv, self.symbol, self.timeframe, 2
+                    None, exchange_client.fetch_ohlcv, self.symbol, self.timeframe, 1
                 )
                 
-                if df.empty:
+                if df.empty or not price:
                     continue
 
                 last_row = df.iloc[-1]
-                price = last_row["close"]
                 
                 candle_data = {
                     "time": int(df.index[-1].timestamp()),
@@ -415,8 +420,8 @@ class TradingEngine:
         return {
             "status":        self.status.value,
             "status_message": self.status_message,
-            "symbol":        self.symbol,
-            "timeframe":     self.timeframe,
+            "symbol":        f"BINANCE:{self.symbol.replace('/','')}PERP",
+            "interval":      '60' if self.timeframe == '1h' else '15' if self.timeframe == '15m' else '1',
             "running":       self.running,
             "cycle_count":   self.cycle_count,
             "started_at":    self.started_at,

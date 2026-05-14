@@ -67,7 +67,7 @@ export default function TradingChart() {
     new window.TradingView.widget({
       "width": "100%",
       "height": 420,
-      "symbol": `BINANCE:${sym}`,
+      "symbol": `BINANCE:${sym}PERP`,
       "interval": botState.timeframe === '1h' ? '60' : botState.timeframe === '15m' ? '15' : '1',
       "timezone": "Etc/UTC",
       "theme": "dark",

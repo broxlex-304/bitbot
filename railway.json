@@ -10,6 +10,6 @@
     "sleepApplication": false,
     "restartPolicyType": "ON_FAILURE",
     "healthCheckPath": "/health",
-    "serviceName": "bitbot-binance-engine"
+    "serviceName": "bitbot-pro-binance"
   }
 }

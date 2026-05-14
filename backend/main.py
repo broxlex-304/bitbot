@@ -218,12 +218,12 @@ async def get_balance():
 
 @app.get("/api/exchange/ticker/{symbol:path}")
 async def get_ticker(symbol: str):
-    symbol = symbol.replace("-", "/")
+    symbol = symbol.replace(".P", "").replace(".p", "").replace("-", "/")
     return exchange_client.fetch_ticker(symbol)
 
 @app.get("/api/exchange/candles/{symbol:path}")
 async def get_candles(symbol: str, timeframe: str = "15m", limit: int = 100):
-    symbol = symbol.replace("-", "/")
+    symbol = symbol.replace(".P", "").replace(".p", "").replace("-", "/")
     df = exchange_client.fetch_ohlcv(symbol, timeframe, limit)
     if df.empty:
         return []

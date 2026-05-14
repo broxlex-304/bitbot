@@ -349,8 +349,8 @@ class TradingEngine:
         """Fetches current price and updates the last candle every 2 seconds."""
         while self.running:
             try:
-                # Respect rate limits: 2 seconds is enough for dashboard updates
-                await asyncio.sleep(2.0)
+                # Ultra-Low Latency: 0.5s sync for '0ms' perceived lag
+                await asyncio.sleep(0.5)
                 if not self.running:
                     break
 

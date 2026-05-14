@@ -3,8 +3,6 @@ import { useStore } from '@/lib/store';
 
 const NAV_ITEMS = [
   { id: 'dashboard', icon: '📊', label: 'Dashboard' },
-  { id: 'chart',     icon: '📈', label: 'Live Chart' },
-  { id: 'signals',   icon: '🎯', label: 'Signals' },
   { id: 'positions', icon: '💼', label: 'Positions' },
   { id: 'news',      icon: '📰', label: 'News Feed' },
   { id: 'logs',      icon: '📋', label: 'Activity Logs' },

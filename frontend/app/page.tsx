@@ -227,71 +227,6 @@ function Dashboard() {
   );
 }
 
-/* ─── Signals View ───────────────────────────────────────────────────────────── */
-function SignalsView() {
-  const { prediction, taComposite } = useStore();
-  return (
-    <div className="animate-in" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-      <PredictionPanel />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {taComposite && (
-          <div className="card">
-            <div className="card-title">📊 TA Score</div>
-            <div style={{ textAlign: 'center', padding: '16px 0' }}>
-              <div style={{ fontSize: 52, fontWeight: 900, color: taComposite.score >= 60 ? 'var(--green)' : taComposite.score <= 40 ? 'var(--red)' : 'var(--yellow)' }}>
-                {taComposite.score.toFixed(0)}%
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{taComposite.direction} — {taComposite.total_signals} signals</div>
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              {[
-                { l: '▲ Bullish', v: taComposite.bull_signals, c: 'var(--green)' },
-                { l: '▼ Bearish', v: taComposite.bear_signals, c: 'var(--red)' },
-              ].map((x) => (
-                <div key={x.l} style={{ flex: 1, textAlign: 'center', padding: 12, background: 'var(--bg-base)', borderRadius: 'var(--radius-sm)' }}>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: x.c }}>{x.v}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{x.l}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="card">
-          <div className="card-title">🎯 Trade Parameters</div>
-          {prediction.stop_loss_pct ? (
-            [
-              { label: 'Direction', value: prediction.direction || '—', color: prediction.direction === 'BUY' ? 'var(--green)' : prediction.direction === 'SELL' ? 'var(--red)' : 'var(--yellow)' },
-              { label: 'Confidence', value: `${prediction.confidence}%`, color: 'var(--primary)' },
-              { label: 'Stop Loss', value: `-${prediction.stop_loss_pct}%`, color: 'var(--red)' },
-              { label: 'Take Profit', value: `+${prediction.take_profit_pct}%`, color: 'var(--green)' },
-              { label: 'Risk:Reward', value: `1:${((prediction.take_profit_pct! / prediction.stop_loss_pct!)).toFixed(1)}`, color: 'var(--yellow)' },
-              { label: 'Threshold', value: `${prediction.threshold ?? 85}%`, color: 'var(--text-muted)' },
-            ].map((r) => (
-              <div key={r.label} className="indicator-row">
-                <span className="ind-name">{r.label}</span>
-                <span className="ind-value" style={{ color: r.color, fontSize: 14 }}>{r.value}</span>
-              </div>
-            ))
-          ) : (
-            <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0', fontSize: 13 }}>No active signal</div>
-          )}
-        </div>
-        <div className="card">
-          <div className="card-title">💡 Bot Reasoning</div>
-          {prediction.reasoning && prediction.reasoning.length > 0 ? (
-            prediction.reasoning.map((r, i) => (
-              <div key={`reason-${i}`} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, display: 'flex', gap: 6 }}>
-                <span style={{ color: 'var(--primary)', flexShrink: 0 }}>›</span>{r}
-              </div>
-            ))
-          ) : (
-            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>No reasoning available yet</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ─── Logs View ──────────────────────────────────────────────────────────────── */
 function LogsView() {
@@ -329,8 +264,6 @@ export default function Page() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;
-      case 'chart':     return <div className="animate-in"><TradingChart /></div>;
-      case 'signals':   return <SignalsView />;
       case 'positions': return (
         <div className="animate-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div className="card">

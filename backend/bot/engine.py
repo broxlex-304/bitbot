@@ -279,6 +279,13 @@ class TradingEngine:
                 await broadcast_event("position_closed", c)
 
         # ── 7. Execute Trade if Signal is Confident ──────────────────────────
+        direction = prediction.get("direction")
+        confidence = prediction.get("confidence", 0)
+        should_trade = prediction.get("should_trade", False)
+        sl_pct = prediction.get("stop_loss_pct")
+        tp_pct = prediction.get("take_profit_pct")
+
+        if should_trade and direction in ["BUY", "SELL"]:
             amount_usdt = settings.trade_amount_usdt
 
             # Expert Risk Guard: Check balance before execution

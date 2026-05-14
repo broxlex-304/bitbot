@@ -24,7 +24,11 @@ export default function TradingChart() {
     container.style.width = '100%';
     tvContainerRef.current.appendChild(container);
 
-    let sym = botState.symbol.replace('/', '').replace('.p', '').replace('.P', '').replace('PERP', '');
+    // Professional normalization: Strip everything except the core pair
+    let sym = botState.symbol
+      .replace('BINANCE:', '').replace('MEXC:', '').replace('BYBIT:', '').replace('KUCOIN:', '').replace('OKX:', '')
+      .replace('/', '').replace('.P', '').replace('.p', '').replace('PERP', '');
+    
     new window.TradingView.widget({
       "width": "100%",
       "height": "100%",
@@ -92,11 +96,11 @@ export default function TradingChart() {
       
       <div id="tv_chart_container" ref={tvContainerRef} style={{ height: 'calc(100% - 48px)', width: '100%' }} />
 
-      {/* Floating Prediction Overlay (Directly on Chart) */}
+      {/* Floating Prediction Overlay (Directly on Chart - MOVED TO BOTTOM) */}
       {!isNeutral && (
         <div style={{
           position: 'absolute',
-          top: 70,
+          bottom: 20,
           left: 20,
           background: 'rgba(17, 24, 39, 0.85)',
           backdropFilter: 'blur(12px)',

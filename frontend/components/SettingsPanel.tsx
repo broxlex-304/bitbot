@@ -5,7 +5,7 @@ import { useStore } from '@/lib/store';
 
 const EXCHANGES = ['mexc', 'binance', 'bybit', 'okx', 'kucoin', 'gate', 'bitget', 'huobi'];
 const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
-const DEFAULT_SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
+const DEFAULT_SYMBOLS = ['BTCUSDT.p', 'BTCUSDT', 'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
 
 export default function SettingsPanel() {
   const { botState } = useStore();
@@ -13,7 +13,7 @@ export default function SettingsPanel() {
     exchange_id: 'mexc',
     api_key: '',
     api_secret: '',
-    symbol: 'BTC/USDT',
+    symbol: 'BTCUSDT.p',
     timeframe: '15m',
     confidence_threshold: 85,
     trade_amount_usdt: 10,

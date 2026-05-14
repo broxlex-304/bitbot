@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 export default function Topbar() {
   const { botState, currentPrice, wsConnected, setBotState } = useStore();
   const [loading, setLoading] = useState(false);
-  const DEFAULT_SYMBOLS = ['BTC/USDT', 'BTCUSDT.p', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
+  const DEFAULT_SYMBOLS = ['BTCUSDT.p', 'BTCUSDT', 'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
   const [symbolsList, setSymbolsList] = useState<{symbol: string, label: string}[]>(
     DEFAULT_SYMBOLS.map(s => ({symbol: s, label: s}))
   );
@@ -74,7 +74,7 @@ export default function Topbar() {
   };
 
   return (
-    <header className="topbar" style={{ flexWrap: 'wrap', height: 'auto', minHeight: 64, padding: '10px 20px', gap: 16 }}>
+    <header className="topbar" style={{ height: 64, padding: '0 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
       {/* Symbol + price */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column' }}>

@@ -38,9 +38,11 @@ class RiskManager:
     def __init__(self):
         self.positions: Dict[str, Position] = {}   # id → Position
         self.trade_history: List[Dict] = []
-        self.total_pnl_usdt: float = 0.0
         self.win_count: int = 0
         self.loss_count: int = 0
+        self.total_pnl_usdt: float = 0.0
+        self.daily_pnl_usdt: float = 0.0
+        self.last_pnl_reset: str = datetime.utcnow().date().isoformat()
         self._load_state()
 
     def _save_pos(self, pos: Position):
@@ -122,9 +124,6 @@ class RiskManager:
             logger.warning(f"Max open trades ({settings.max_open_trades}) reached — skipping")
             return None
 
-        # Removed redundant re-calculation. Predictor now handles dynamic SL/TP.
-        # This prevents the "moving stoploss" bug where predicted SL/TP differed from actual.
-
         amount = amount_usdt / entry_price
 
         if direction == "BUY":
@@ -134,7 +133,6 @@ class RiskManager:
             sl_price = entry_price * (1 + stop_loss_pct / 100)
             tp_price = entry_price * (1 - take_profit_pct / 100)
 
-        # Expert Rounding: Use exchange-specific price precision
         if exchange_client.exchange and symbol in exchange_client.exchange.markets:
              sl_price = float(exchange_client.exchange.price_to_precision(symbol, sl_price))
              tp_price = float(exchange_client.exchange.price_to_precision(symbol, tp_price))
@@ -142,7 +140,6 @@ class RiskManager:
              sl_price = round(sl_price, 8)
              tp_price = round(tp_price, 8)
 
-        # Add random suffix to ID to prevent collision
         import random
         suffix = random.randint(100, 999)
         pos_id = f"{symbol.replace('/', '')}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{suffix}"
@@ -163,7 +160,6 @@ class RiskManager:
         self.positions[pos_id] = pos
         self._save_pos(pos)
         
-        # Notify Telegram
         telegram_alerts.notify_trade_open(pos.to_dict())
         
         logger.trade(
@@ -197,6 +193,69 @@ class RiskManager:
 
         return closed
 
+    def _check_pnl_reset(self):
+        """Reset daily PnL if a new day has started."""
+        today = datetime.utcnow().date().isoformat()
+        if today != self.last_pnl_reset:
+            logger.info(f"New trading day! Resetting daily PnL (was ${self.daily_pnl_usdt:+.2f})")
+            self.daily_pnl_usdt = 0.0
+            self.last_pnl_reset = today
+
+    def is_circuit_broken(self) -> Tuple[bool, str]:
+        """
+        Institutional Safety Check:
+        Returns (True, reason) if trading should be halted.
+        """
+        self._check_pnl_reset()
+        from config import settings
+        
+        # 1. Daily Loss Limit
+        # Assume starting equity is roughly sum of trade amounts * 10 (arbitrary for now, or use balance)
+        # Better: check against settings.max_daily_loss_pct of total balance
+        balance = exchange_client.fetch_balance()
+        total_equity = balance.get("total", {}).get("USDT", 1000.0) # Fallback to 1000 if fetch fails
+        
+        daily_loss_limit = total_equity * (settings.max_daily_loss_pct / 100)
+        if self.daily_pnl_usdt < -daily_loss_limit:
+            return True, f"Daily Loss Limit Exceeded (${self.daily_pnl_usdt:.2f} < -${daily_loss_limit:.2f})"
+            
+        # 2. Consecutive Losses Guard
+        if len(self.trade_history) >= 5:
+            last_5 = self.trade_history[-5:]
+            if all(t.get("pnl_usdt", 0) < 0 for t in last_5):
+                return True, "Consecutive Loss Limit (5) reached. Halting for strategy review."
+                
+        return False, ""
+
+    def check_signal_decay(self, symbol: str, current_prediction: Dict[str, Any]) -> Optional[Dict]:
+        """
+        Exits a position if the AI signal has significantly decayed or flipped.
+        This protects profits and cuts losses before SL is hit if the thesis changes.
+        """
+        for pos in list(self.positions.values()):
+            if pos.status == "open" and pos.symbol == symbol:
+                new_dir = current_prediction.get("direction", "NEUTRAL")
+                conf = current_prediction.get("confidence", 0)
+                
+                # Exit if direction flips or confidence drops below 40% (high uncertainty)
+                should_exit = False
+                reason = ""
+                
+                if new_dir != "NEUTRAL" and new_dir != pos.direction:
+                    should_exit = True
+                    reason = f"Signal Flip ({pos.direction} -> {new_dir})"
+                elif conf < 40:
+                    should_exit = True
+                    reason = f"Signal Decay (Confidence {conf}% < 40%)"
+                
+                if should_exit:
+                    logger.warning(f"🚀 AI Signal Decay/Flip detected for {symbol}: {reason}. Closing position early.")
+                    ticker = exchange_client.fetch_ticker(symbol)
+                    price = ticker.get("last", 0)
+                    if price:
+                        return self._close_position(pos, price, f"closed_decay_{new_dir.lower()}")
+        return None
+
     def _close_position(self, pos: Position, close_price: float, reason: str) -> Dict:
         logger.info(f"Executing exchange order to close {pos.symbol} position...")
         if pos.direction == "BUY":
@@ -221,6 +280,7 @@ class RiskManager:
         pos.closed_at   = datetime.utcnow().isoformat() + "Z"
 
         self.total_pnl_usdt += pnl_usdt
+        self.daily_pnl_usdt += pnl_usdt
         if pnl_usdt >= 0:
             self.win_count += 1
         else:
@@ -259,6 +319,7 @@ class RiskManager:
             "losses":       self.loss_count,
             "win_rate_pct": round(win_rate, 2),
             "total_pnl_usdt": round(self.total_pnl_usdt, 4),
+            "daily_pnl_usdt": round(self.daily_pnl_usdt, 4),
             "open_positions": len(self.get_open_positions()),
             "trade_history": self.trade_history[-20:],
         }

@@ -286,6 +286,24 @@ class TradingEngine:
             for c in closed:
                 await broadcast_event("position_closed", c)
 
+        # ── 6b. Check Signal Decay (Thesis Change) ───────────────────────────
+        decayed_pos = risk_manager.check_signal_decay(self.symbol, prediction)
+        if decayed_pos:
+            await broadcast_event("position_closed", decayed_pos)
+            # Re-fetch active_pos state for logging
+            active_pos = None
+
+        # ── 6c. Safety Guard: Circuit Breaker ────────────────────────────────
+        is_halted, reason = risk_manager.is_circuit_broken()
+        if is_halted and self.trading_active:
+            logger.critical(f"🛑 CIRCUIT BREAKER TRIGGERED: {reason}. Disabling trading for safety.")
+            self.trading_active = False
+            self._set_status(BotStatus.PAUSED, f"Circuit Breaker: {reason}")
+            # Also notify Telegram
+            from bot.alerts import telegram_alerts
+            telegram_alerts.notify_generic("🛑 CIRCUIT BREAKER", f"Bot has halted trading: {reason}")
+            return
+
         # ── 7. Execute Trade if Signal is Confident and Trading is Enabled ────
         direction = prediction.get("direction")
         confidence = prediction.get("confidence", 0)

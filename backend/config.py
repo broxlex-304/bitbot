@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     confidence_threshold: float = 85.0
     stop_loss_percent: float = 2.0
     take_profit_percent: float = 4.0
+    max_daily_loss_pct: float = 5.0
+    max_drawdown_pct: float = 10.0
 
     # News APIs
     newsapi_key: Optional[str] = None

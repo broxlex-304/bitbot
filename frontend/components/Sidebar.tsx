@@ -18,7 +18,7 @@ export default function Sidebar() {
         <div className="sidebar-logo-icon">🤖</div>
         <div>
           <div className="sidebar-logo-name"><span>Bit</span>Bot</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500 }}>v1.0 · AI Trading</div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500 }}>v1.2 · PRO Trading</div>
         </div>
       </div>
 

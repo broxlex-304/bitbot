@@ -44,7 +44,8 @@ export default function SettingsPanel() {
     // Fetch dynamic symbols list
     api.getSymbols().then((data) => {
       if (data.symbols && data.symbols.length > 0) {
-        setSymbolsList(data.symbols);
+        const combined = Array.from(new Set([...DEFAULT_SYMBOLS, ...data.symbols]));
+        setSymbolsList(combined);
       }
     }).catch(() => {});
   }, [botState.exchange_connected]);

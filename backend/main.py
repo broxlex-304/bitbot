@@ -210,7 +210,7 @@ async def get_symbols():
         if not symbols: # fallback to any USDT market
             symbols = [s for s in exchange_client.exchange.markets.keys() if '/USDT' in s]
         return {"symbols": sorted(list(set(symbols)))}
-    return {"symbols": ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT']}
+    return {"symbols": ['BTCUSDT.p', 'BTCUSDT', 'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT']}
 
 @app.get("/api/exchange/balance")
 async def get_balance():

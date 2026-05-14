@@ -5,9 +5,12 @@ import { useStore } from '@/lib/store';
 const getWsUrl = () => {
   if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
   if (process.env.NEXT_PUBLIC_API_URL) {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    let apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0, -1);
+    
     if (apiUrl.startsWith('https://')) return apiUrl.replace('https://', 'wss://') + '/ws';
     if (apiUrl.startsWith('http://')) return apiUrl.replace('http://', 'ws://') + '/ws';
+    return `wss://${apiUrl.replace('wss://', '').replace('ws://', '')}/ws`;
   }
   if (typeof window !== 'undefined') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

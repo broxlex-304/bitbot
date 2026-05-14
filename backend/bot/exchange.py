@@ -30,7 +30,7 @@ class ExchangeClient:
                 "secret": secret,
                 "enableRateLimit": True,
                 "options": {
-                    "defaultType": "spot",
+                    "defaultType": "swap", # Switched to Perpetual Futures as requested
                     "recvWindow": 60000 
                 },
             })
@@ -80,7 +80,7 @@ class ExchangeClient:
         try:
             self.exchange = ccxt.binance({
                 "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
+                "options": {"defaultType": "swap"}, # Switched to Perpetual Futures as requested
             })
             self.exchange.load_markets()
             self.connected = True

@@ -205,9 +205,9 @@ async def get_supported_exchanges():
 @app.get("/api/exchange/symbols")
 async def get_symbols():
     if exchange_client.exchange and exchange_client.exchange.markets:
-        # Get all USDT spot markets
-        symbols = [s for s, m in exchange_client.exchange.markets.items() if m.get('quote') == 'USDT' and m.get('spot')]
-        if not symbols: # fallback
+        # Get all USDT perpetual swap markets
+        symbols = [s for s, m in exchange_client.exchange.markets.items() if m.get('quote') == 'USDT' and (m.get('swap') or m.get('future'))]
+        if not symbols: # fallback to any USDT market
             symbols = [s for s in exchange_client.exchange.markets.keys() if '/USDT' in s]
         return {"symbols": sorted(list(set(symbols)))}
     return {"symbols": ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT']}

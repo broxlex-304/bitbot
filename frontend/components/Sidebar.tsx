@@ -2,7 +2,7 @@
 import { useStore } from '@/lib/store';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+  { id: 'dashboard', icon: '💎', label: 'PRO Trading View' },
   { id: 'positions', icon: '💼', label: 'Positions' },
   { id: 'news',      icon: '📰', label: 'News Feed' },
   { id: 'logs',      icon: '📋', label: 'Activity Logs' },

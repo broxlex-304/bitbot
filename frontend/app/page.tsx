@@ -182,32 +182,6 @@ function Dashboard() {
 
   return (
     <div className="animate-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div className="grid-4">
-        <StatCard
-          label="Current Price"
-          value={currentPrice > 0 ? `$${currentPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
-          sub={botState.symbol}
-          accent="var(--primary)" icon="💲"
-        />
-        <StatCard
-          label="Total P&L"
-          value={(stats.total_pnl_usdt || 0) >= 0 ? `+$${(stats.total_pnl_usdt || 0).toFixed(2)}` : `-$${Math.abs(stats.total_pnl_usdt || 0).toFixed(2)}`}
-          sub={`${stats.total_trades || 0} trades`}
-          accent={pnlColor} icon="💰"
-        />
-        <StatCard
-          label="Win Rate"
-          value={`${(stats.win_rate_pct || 0).toFixed(1)}%`}
-          sub={`${stats.wins || 0}W / ${stats.losses || 0}L`}
-          accent="var(--green)" icon="🏆"
-        />
-        <StatCard
-          label="Open Positions"
-          value={stats.open_positions || 0}
-          sub={`Threshold: ${botState.confidence_threshold ?? 85}%`}
-          accent="var(--purple)" icon="📂"
-        />
-      </div>
 
       <div className="grid-main">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

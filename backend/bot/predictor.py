@@ -88,6 +88,7 @@ class Predictor:
         pattern_results: Optional[Dict] = None,
         ml_results: Optional[Dict] = None,
         symbol: str = "",
+        active_pos: Optional[Any] = None,
     ) -> Dict[str, Any]:
 
         logger.thinking(f"🧠 Running AI fusion prediction for {symbol}...")
@@ -342,21 +343,29 @@ class Predictor:
 
         # ── 9. Adaptive Risk Parameters ────────────────────────────────────────
         # ── 9. Adaptive Risk Parameters (Expert Stabilized) ───────────────────
-        # Use more standard multipliers to prevent "stop-loss hunting" by market noise
-        # Tighter SL in strong trends (1.5x ATR), wider in weaker/ranging ones (2.0x ATR)
-        sl_multiplier = 1.5 if adx_val > 30 else 2.0
-        
-        # Ensure SL is at least 1.0% to prevent micro-stops on low-volatility coins
-        stop_loss_pct   = round(max(1.0, min(6.0, atr_pct * sl_multiplier)), 2)
-        
-        # Expert Insight: 2.5:1 Reward-to-Risk ratio for institutional-grade edge
-        take_profit_pct = round(stop_loss_pct * 2.5, 2)
-
-        # ── 10. Reasoning Build ────────────────────────────────────────────────
-        reasoning: List[str] = [
-            f"Risk Model: SL set at {stop_loss_pct}% ({sl_multiplier}x ATR volatility)",
-            f"Target Model: TP set at {take_profit_pct}% (2.5:1 Reward/Risk ratio)"
-        ]
+        if active_pos:
+            # If we have an active position, we LOCK the reasoning to its fixed parameters
+            stop_loss_pct   = active_pos.stop_loss_pct
+            take_profit_pct = active_pos.take_profit_pct
+            sl_price        = active_pos.stop_loss_price
+            tp_price        = active_pos.take_profit_price
+            
+            reasoning: List[str] = [
+                f"🛡️ ACTIVE TRADE: Entry ${active_pos.entry_price:.2f}",
+                f"🛡️ FIXED EXIT: Stop Loss at ${sl_price} ({stop_loss_pct}%)",
+                f"🛡️ FIXED TARGET: Take Profit at ${tp_price} ({take_profit_pct}%)",
+                f"Trade Strategy: {active_pos.direction} momentum tracking in progress."
+            ]
+        else:
+            # Use standard dynamic multipliers for potential new trade
+            sl_multiplier = 1.5 if adx_val > 30 else 2.0
+            stop_loss_pct   = round(max(1.0, min(6.0, atr_pct * sl_multiplier)), 2)
+            take_profit_pct = round(stop_loss_pct * 2.5, 2)
+            
+            reasoning: List[str] = [
+                f"Risk Model: SL set at {stop_loss_pct}% ({sl_multiplier}x ATR volatility)",
+                f"Target Model: TP set at {take_profit_pct}% (2.5:1 Reward/Risk ratio)"
+            ]
         if ml_dir != "NEUTRAL":
             reasoning.append(f"AI ML: {ml_dir} signal (Random Forest probability: {ml_score:.1f}%)")
         if ta_dir != "NEUTRAL":

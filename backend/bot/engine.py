@@ -241,6 +241,8 @@ class TradingEngine:
         )
 
         # ── 5. AI Prediction ─────────────────────────────────────────────────
+        active_pos = next((p for p in risk_manager.positions.values() if p.symbol == self.symbol and p.status == "open"), None)
+
         prediction = self.predictor.predict(
             ta_results=ta_primary,
             ta_results_htf=ta_htf,
@@ -250,6 +252,7 @@ class TradingEngine:
             pattern_results=pattern_data,
             ml_results=ml_data,
             symbol=self.symbol,
+            active_pos=active_pos
         )
         self.last_prediction = prediction
 

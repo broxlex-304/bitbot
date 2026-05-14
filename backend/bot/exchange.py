@@ -76,16 +76,23 @@ class ExchangeClient:
         return success
 
     def connect_public(self) -> Tuple[bool, str]:
-        """Connect to Binance public API (no keys needed) for paper trading / analysis."""
+        """Connect to public API (no keys needed) for paper trading / analysis."""
         try:
-            self.exchange = ccxt.binance({
+            eid = self.exchange_id or "mexc"
+            
+            # If the exchange is binance and we are getting blocked, we can safely fallback to mexc
+            if eid == "binance":
+                eid = "mexc"
+                
+            exchange_class = getattr(ccxt, eid)
+            self.exchange = exchange_class({
                 "enableRateLimit": True,
-                "options": {"defaultType": "swap"}, # Switched to Perpetual Futures as requested
+                "options": {"defaultType": "swap"}, # Perpetual Futures
             })
             self.exchange.load_markets()
             self.connected = True
             self.paper_mode = True
-            msg = "Connected to Binance Public API (Paper mode)"
+            msg = f"Connected to {eid.upper()} Public API (Paper mode)"
             logger.success(f"📊 {msg}")
             return True, msg
         except Exception as e:

@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Exchange
-    exchange_id: str = "binance"
+    exchange_id: str = "mexc"
     api_key: str = ""
     api_secret: str = ""
 

@@ -18,6 +18,33 @@ class ExchangeClient:
         self.connected = False
         self.paper_mode = False  # True when using public data, no real trades
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Convert various symbol formats to standard CCXT format."""
+        if not symbol: return ""
+        s = symbol.upper()
+        # Remove common prefixes
+        s = s.replace("BINANCE:", "").replace("MEXC:", "").replace("BYBIT:", "")
+        # Remove common suffixes
+        s = s.replace("PERP", "").replace(".P", "")
+        # Replace dashes/underscores with slash
+        s = s.replace("-", "/").replace("_", "/")
+        
+        # Ensure it has a slash
+        if "/" not in s:
+            # Assume USDT pair if no slash
+            if s.endswith("USDT"):
+                s = s[:-4] + "/USDT"
+            else:
+                s = s + "/USDT"
+        
+        # If MEXC and perpetual, we might need :USDT suffix for some CCXT versions
+        if self.exchange_id == "mexc" and "USDT" in s and ":" not in s:
+             # Standard CCXT format for MEXC perpetuals is BTC/USDT:USDT
+             # But often BTC/USDT works too depending on defaultType
+             pass
+             
+        return s
+
     def connect(self, exchange_id: str = None, api_key: str = None, api_secret: str = None) -> Tuple[bool, str]:
         try:
             eid    = exchange_id or self.exchange_id
@@ -105,6 +132,7 @@ class ExchangeClient:
     def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.DataFrame:
         if not self.ensure_connected():
             return pd.DataFrame()
+        symbol = self._normalize_symbol(symbol)
         try:
             raw = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -118,6 +146,7 @@ class ExchangeClient:
     def fetch_ticker(self, symbol: str) -> Dict:
         if not self.ensure_connected():
             return {}
+        symbol = self._normalize_symbol(symbol)
         try:
             return self.exchange.fetch_ticker(symbol)
         except Exception as e:
@@ -127,6 +156,7 @@ class ExchangeClient:
     def fetch_orderbook(self, symbol: str, limit: int = 20) -> Dict:
         if not self.ensure_connected():
             return {}
+        symbol = self._normalize_symbol(symbol)
         try:
             return self.exchange.fetch_order_book(symbol, limit=limit)
         except Exception as e:
@@ -148,7 +178,7 @@ class ExchangeClient:
     def create_market_buy(self, symbol: str, amount_usdt: Optional[float] = None, amount: Optional[float] = None) -> Optional[Dict]:
         if not amount and not amount_usdt:
             return None
-
+        symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             ticker = self.fetch_ticker(symbol)
             price  = ticker.get("last", 0)
@@ -181,7 +211,7 @@ class ExchangeClient:
     def create_market_sell(self, symbol: str, amount: Optional[float] = None, amount_usdt: Optional[float] = None) -> Optional[Dict]:
         if not amount and not amount_usdt:
             return None
-            
+        symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             ticker = self.fetch_ticker(symbol)
             price  = ticker.get("last", 0)
@@ -211,6 +241,7 @@ class ExchangeClient:
 
     def create_stop_limit_order(self, symbol: str, side: str, amount: float,
                                 stop_price: float, limit_price: float) -> Optional[Dict]:
+        symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             return None
         try:
@@ -223,6 +254,7 @@ class ExchangeClient:
             return None
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
+        symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             return True
         try:
@@ -234,6 +266,8 @@ class ExchangeClient:
             return False
 
     def fetch_open_orders(self, symbol: str = None) -> List[Dict]:
+        if symbol:
+            symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             return []
         try:
@@ -243,6 +277,7 @@ class ExchangeClient:
             return []
 
     def fetch_order(self, order_id: str, symbol: str) -> Optional[Dict]:
+        symbol = self._normalize_symbol(symbol)
         if self.paper_mode:
             return None
         try:

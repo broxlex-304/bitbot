@@ -55,7 +55,9 @@ class TradingEngine:
     def __init__(self):
         self.status: BotStatus = BotStatus.IDLE
         self.status_message: str = "Bot is idle"
-        self.symbol    = get_setting("symbol", settings.symbol)
+        # Normalize symbol on init
+        raw_symbol = get_setting("symbol", settings.symbol)
+        self.symbol = exchange_client._normalize_symbol(raw_symbol)
         self.timeframe = get_setting("timeframe", settings.timeframe)
         self.running: bool = False
         self._task: Optional[asyncio.Task] = None
@@ -76,7 +78,9 @@ class TradingEngine:
             logger.warning("Bot is already running")
             return False
 
-        self.symbol    = symbol    or self.symbol
+        # Normalize symbol if provided
+        if symbol:
+            self.symbol = exchange_client._normalize_symbol(symbol)
         self.timeframe = timeframe or self.timeframe
         self.running   = True
         self.started_at = datetime.utcnow().isoformat() + "Z"
@@ -124,7 +128,7 @@ class TradingEngine:
 
     def update_settings(self, **kwargs):
         if "symbol" in kwargs:
-            self.symbol = kwargs["symbol"]
+            self.symbol = exchange_client._normalize_symbol(kwargs["symbol"])
             set_setting("symbol", self.symbol)
         if "timeframe" in kwargs:
             self.timeframe = kwargs["timeframe"]
@@ -417,10 +421,18 @@ class TradingEngine:
         ]
 
     def get_state(self) -> Dict[str, Any]:
+        # Clean symbol for frontend display (TradingView format)
+        display_symbol = self.symbol
+        if "/" in display_symbol:
+            display_symbol = display_symbol.replace("/", "")
+        if not display_symbol.startswith("BINANCE:") and not display_symbol.startswith("MEXC:"):
+            # Default to BINANCE prefix for TradingView chart compatibility if it's a generic pair
+            display_symbol = f"BINANCE:{display_symbol}PERP"
+
         return {
             "status":        self.status.value,
             "status_message": self.status_message,
-            "symbol":        f"BINANCE:{self.symbol.replace('/','')}PERP",
+            "symbol":        display_symbol,
             "interval":      '60' if self.timeframe == '1h' else '15' if self.timeframe == '15m' else '1',
             "running":       self.running,
             "cycle_count":   self.cycle_count,

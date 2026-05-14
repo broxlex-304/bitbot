@@ -37,11 +37,13 @@ export function useWebSocket() {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       setWsConnected(true);
       console.log('[WS] Connected');
     };
 
     ws.onmessage = (evt) => {
+      if (wsRef.current !== ws) return;
       try {
         const raw = evt.data;
         // Skip raw ping/pong strings
@@ -122,6 +124,7 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       setWsConnected(false);
       console.log('[WS] Disconnected — retrying in 3s');
       reconnectRef.current = setTimeout(connect, 3000);

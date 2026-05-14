@@ -14,6 +14,13 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Pass Railway environment variables to the build process
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+ARG NEXT_PUBLIC_WS_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+
 # Build the Next.js app
 RUN npm run build
 

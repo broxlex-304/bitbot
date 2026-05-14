@@ -17,6 +17,7 @@ from bot.ml import ml_engine
 from bot.news import news_analyzer
 from bot.exchange import exchange_client
 from bot.risk import risk_manager
+from bot.context import market_context
 from bot.logger import broadcast_event
 from config import settings
 
@@ -223,10 +224,18 @@ class TradingEngine:
         # ── 3. News Sentiment ────────────────────────────────────────────────
         news_data = await news_analyzer.analyze(self.symbol)
 
+        # ── 3b. Global Market Context (BTC/ETH) ─────────────────────────────
+        await market_context.update()
+
         # ── 4. Order Book Microstructure ─────────────────────────────────────
         logger.analysis("Fetching deep order book microstructure...")
         orderbook = await asyncio.get_event_loop().run_in_executor(
             None, exchange_client.fetch_orderbook, self.symbol, 100
+        )
+
+        # ── 4a. Funding Rate (Institutional Sentiment) ──────────────────────
+        funding_rate = await asyncio.get_event_loop().run_in_executor(
+            None, exchange_client.fetch_funding_rate, self.symbol
         )
 
         # ── 4b. Advanced Pattern Analysis ────────────────────────────────────
@@ -239,6 +248,9 @@ class TradingEngine:
             None, ml_engine.predict, df_primary
         )
 
+        # ── 4d. Dynamic Thresholding (The Governor) ─────────────────────────
+        self._apply_dynamic_thresholding()
+
         # ── 5. AI Prediction ─────────────────────────────────────────────────
         active_pos = next((p for p in risk_manager.positions.values() if p.symbol == self.symbol and p.status == "open"), None)
 
@@ -248,6 +260,7 @@ class TradingEngine:
             ta_results_ltf=ta_ltf,
             news_results=news_data,
             orderbook=orderbook,
+            funding_rate=funding_rate,
             pattern_results=pattern_data,
             ml_results=ml_data,
             symbol=self.symbol,
@@ -427,6 +440,39 @@ class TradingEngine:
             }
             for _, row in df.iterrows()
         ]
+
+    def _apply_dynamic_thresholding(self):
+        """Self-Correction: Adjust confidence threshold based on recent performance."""
+        stats = risk_manager.get_stats()
+        total_trades = stats.get("total_trades", 0)
+        win_rate = stats.get("win_rate_pct", 0)
+        history = stats.get("trade_history", [])
+        
+        base_threshold = float(get_setting("confidence_threshold", settings.confidence_threshold))
+        current_threshold = base_threshold
+        
+        # 1. Performance-based adjustment
+        if total_trades >= 5:
+            if win_rate < 45: # Underperforming -> be more picky
+                current_threshold += 5
+                logger.info(f"The Governor: Low win rate ({win_rate}%) -> Raising threshold +5%")
+            elif win_rate > 65: # Performing well -> allow slightly more trades
+                current_threshold -= 3
+                logger.info(f"The Governor: High win rate ({win_rate}%) -> Lowering threshold -3%")
+                
+        # 2. Losing Streak Guard
+        if len(history) >= 3:
+            last_3 = history[-3:]
+            if all(t.get("pnl_usdt", 0) < 0 for t in last_3):
+                current_threshold += 10
+                logger.warning("The Governor: LOSING STREAK DETECTED! Raising threshold +10% for safety.")
+                
+        # Clamp to reasonable bounds
+        current_threshold = max(75.0, min(95.0, current_threshold))
+        
+        if current_threshold != self.predictor.threshold:
+            logger.info(f"Adaptive Threshold updated: {self.predictor.threshold}% -> {current_threshold}%")
+            self.predictor.threshold = current_threshold
 
     def get_state(self) -> Dict[str, Any]:
         # Clean symbol for frontend display (TradingView format)

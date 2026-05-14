@@ -32,28 +32,33 @@ class MLPredictor:
         df_ml['dist_sma_7'] = (df_ml['close'] - df_ml['sma_7']) / df_ml['sma_7']
         df_ml['dist_sma_21'] = (df_ml['close'] - df_ml['sma_21']) / df_ml['sma_21']
         
-        # 3. Volatility (ATR Proxy & StdDev)
+        # 3. Volatility & Range
         df_ml['volatility_10'] = df_ml['ret_1'].rolling(10).std()
-        df_ml['high_low_spread'] = (df_ml['high'] - df_ml['low']) / df_ml['close']
+        df_ml['range_pct'] = (df_ml['high'] - df_ml['low']) / df_ml['low']
+        df_ml['body_pct'] = abs(df_ml['close'] - df_ml['open']) / (df_ml['high'] - df_ml['low'] + 1e-9)
         
         # 4. Momentum (RSI Proxy)
         delta = df_ml['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
+        rs = gain / (loss + 1e-9)
         df_ml['rsi_14'] = 100 - (100 / (1 + rs))
         
         # 5. MACD Proxy
         ema_12 = df_ml['close'].ewm(span=12, adjust=False).mean()
         ema_26 = df_ml['close'].ewm(span=26, adjust=False).mean()
-        df_ml['macd'] = ema_12 - ema_26
-        df_ml['macd_signal'] = df_ml['macd'].ewm(span=9, adjust=False).mean()
-        df_ml['macd_hist'] = df_ml['macd'] - df_ml['macd_signal']
+        df_ml['macd_hist'] = (ema_12 - ema_26) - (ema_12 - ema_26).ewm(span=9, adjust=False).mean()
         
-        # 6. Bollinger Bands Width
-        std_20 = df_ml['close'].rolling(20).std()
-        sma_20 = df_ml['close'].rolling(20).mean()
-        df_ml['bb_width'] = (4 * std_20) / sma_20
+        # 6. Session Awareness (Institutional Hours)
+        # Assuming index is DatetimeIndex
+        if isinstance(df_ml.index, pd.DatetimeIndex):
+            df_ml['hour'] = df_ml.index.hour
+            df_ml['is_london'] = ((df_ml['hour'] >= 8) & (df_ml['hour'] <= 16)).astype(int)
+            df_ml['is_ny'] = ((df_ml['hour'] >= 13) & (df_ml['hour'] <= 21)).astype(int)
+        else:
+            df_ml['hour'] = 0
+            df_ml['is_london'] = 0
+            df_ml['is_ny'] = 0
         
         df_ml.replace([np.inf, -np.inf], np.nan, inplace=True)
         return df_ml
@@ -69,7 +74,7 @@ class MLPredictor:
         
         features = [
             'ret_1', 'ret_3', 'ret_5', 'vol_change', 'dist_sma_7', 'dist_sma_21', 
-            'volatility_10', 'high_low_spread', 'rsi_14', 'macd_hist', 'bb_width'
+            'volatility_10', 'range_pct', 'body_pct', 'rsi_14', 'macd_hist', 'is_london', 'is_ny'
         ]
         
         X = df_ml[features]
@@ -97,7 +102,7 @@ class MLPredictor:
         
         features = [
             'ret_1', 'ret_3', 'ret_5', 'vol_change', 'dist_sma_7', 'dist_sma_21', 
-            'volatility_10', 'high_low_spread', 'rsi_14', 'macd_hist', 'bb_width'
+            'volatility_10', 'range_pct', 'body_pct', 'rsi_14', 'macd_hist', 'is_london', 'is_ny'
         ]
         
         # Forward fill any recent NaNs for prediction

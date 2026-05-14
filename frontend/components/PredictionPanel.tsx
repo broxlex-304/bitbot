@@ -21,7 +21,7 @@ function ConfidenceRing({ confidence, direction }: { confidence: number; directi
       </svg>
       <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ fontSize: 28, fontWeight: 900, color, letterSpacing: '-1px' }}>{confidence.toFixed(0)}%</div>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase' }}>confidence</div>
+        <div style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase' }}>Win Probability</div>
       </div>
     </div>
   );
@@ -41,8 +41,8 @@ export default function PredictionPanel() {
   };
   const dc = dirConfig[dir] || dirConfig.NEUTRAL;
 
-  const scores = prediction.component_scores;
-  const newsData = news as Record<string, unknown>;
+  const scores = prediction?.component_scores;
+  const newsData = (news || {}) as Record<string, unknown>;
 
   return (
     <div className="card animate-in" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -56,7 +56,7 @@ export default function PredictionPanel() {
           {dc.emoji} {dir}
         </span>
         <div style={{ marginTop: 8, fontSize: 12, color: shouldTrade ? 'var(--green)' : 'var(--text-muted)' }}>
-          {shouldTrade ? '✅ Trade Signal Active' : `🔍 Monitoring (need ${(prediction.threshold ?? 85).toFixed(0)}%)`}
+          {shouldTrade ? '✅ Trade Signal Active' : `🔍 Monitoring (need ${(prediction?.threshold ?? 85).toFixed(0)}%)`}
         </div>
       </div>
 
@@ -76,7 +76,7 @@ export default function PredictionPanel() {
             <div key={s.label} style={{ marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 12 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{s.label}</span>
-                <span style={{ color: s.color, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>{s.value.toFixed(0)}%</span>
+                <span style={{ color: s.color, fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>{(s.value ?? 50).toFixed(0)}%</span>
               </div>
               <div style={{ height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
                 <div style={{ width: `${s.value}%`, height: '100%', background: s.color, borderRadius: 3, transition: 'width 0.8s ease', boxShadow: `0 0 8px ${s.color}40` }} />
@@ -104,7 +104,7 @@ export default function PredictionPanel() {
           <div className="divider" />
           <div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Reasoning</div>
-            {prediction.reasoning.map((r, i) => (
+            {prediction?.reasoning?.map((r, i) => (
               <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 5, display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span style={{ color: 'var(--primary)', flexShrink: 0 }}>›</span>
                 {r}

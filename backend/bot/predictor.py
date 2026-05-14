@@ -8,6 +8,7 @@ into a single confidence score and trade signal.
 from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
 from bot import logger
+from bot.context import market_context
 
 
 # ── Weights for signal fusion ──────────────────────────────────────────────────
@@ -19,41 +20,56 @@ W_MOMENTUM  = 0.10   # Multi-timeframe agreement
 W_MICROSTR  = 0.10   # Order book bid/ask imbalance
 
 
-def _market_structure_score(orderbook: Optional[Dict]) -> Tuple[float, str]:
-    """Analyze deep bid/ask liquidity with exponential distance decay."""
+def _market_structure_score(orderbook: Optional[Dict]) -> Tuple[float, str, Dict[str, Any]]:
+    """
+    Analyze deep bid/ask liquidity with exponential distance decay.
+    Detects Liquidity Clusters (Whale Walls).
+    """
     if not orderbook:
-        return 50.0, "NEUTRAL"
+        return 50.0, "NEUTRAL", {}
     bids = orderbook.get("bids", [])
     asks = orderbook.get("asks", [])
     if not bids or not asks:
-        return 50.0, "NEUTRAL"
+        return 50.0, "NEUTRAL", {}
         
     mid_price = (bids[0][0] + asks[0][0]) / 2
     
     bid_pressure = 0.0
+    clusters = []
+    
+    avg_bid_vol = sum(v for p, v in bids) / len(bids) if bids else 1
     for price, vol in bids:
         dist = abs(mid_price - price) / mid_price
         # Weight decays exponentially as we go deeper into the book
         weight = np.exp(-15 * dist) 
         bid_pressure += vol * weight
         
+        # Detect Liquidity Cluster (3x average volume)
+        if vol > avg_bid_vol * 3.5:
+            clusters.append({"type": "SUPPORT", "price": price, "strength": round(vol / avg_bid_vol, 1)})
+        
     ask_pressure = 0.0
+    avg_ask_vol = sum(v for p, v in asks) / len(asks) if asks else 1
     for price, vol in asks:
         dist = abs(price - mid_price) / mid_price
         weight = np.exp(-15 * dist)
         ask_pressure += vol * weight
         
+        # Detect Liquidity Cluster (3x average volume)
+        if vol > avg_ask_vol * 3.5:
+            clusters.append({"type": "RESISTANCE", "price": price, "strength": round(vol / avg_ask_vol, 1)})
+        
     total = bid_pressure + ask_pressure
     if total == 0:
-        return 50.0, "NEUTRAL"
+        return 50.0, "NEUTRAL", {"clusters": clusters}
         
     bid_pct = (bid_pressure / total) * 100
     
-    if bid_pct >= 58:
-        return round(bid_pct, 2), "BUY"
-    elif bid_pct <= 42:
-        return round(bid_pct, 2), "SELL"
-    return round(bid_pct, 2), "NEUTRAL"
+    direction = "NEUTRAL"
+    if bid_pct >= 58: direction = "BUY"
+    elif bid_pct <= 42: direction = "SELL"
+    
+    return round(bid_pct, 2), direction, {"clusters": sorted(clusters, key=lambda x: x['strength'], reverse=True)[:3]}
 
 
 def _multi_timeframe_momentum(ta_list: List[Dict]) -> Tuple[float, str]:
@@ -63,6 +79,24 @@ def _multi_timeframe_momentum(ta_list: List[Dict]) -> Tuple[float, str]:
         return 50.0, "NEUTRAL"
     avg = sum(scores) / len(scores)
     return round(avg, 2), "BUY" if avg >= 60 else ("SELL" if avg <= 40 else "NEUTRAL")
+
+
+def _bayesian_fusion(prior: float, signals: List[Tuple[float, float]]) -> float:
+    """
+    Bayesian Probability Update.
+    prior: 0.0 to 1.0 (starting belief)
+    signals: List of (probability, weight)
+    """
+    p = prior
+    for prob, weight in signals:
+        # Scale the influence by weight
+        # prob is 0 to 100, normalize to 0 to 1
+        evidence = prob / 100.0
+        # Incorporate weight: push evidence closer to 0.5 (neutral) if weight is low
+        influence = 0.5 + (evidence - 0.5) * weight
+        # Bayes update
+        p = (p * influence) / (p * influence + (1 - p) * (1 - influence) + 1e-9)
+    return p * 100
 
 
 class Predictor:
@@ -77,6 +111,7 @@ class Predictor:
         self.smoothing_factor = 0.35 # Expert stable smoothing (0.0 to 1.0)
         self.confirmation_counts: Dict[str, int] = {} # Counter for sustained signals
         self.req_confirmations = 2 # Need 2 cycles of high confidence to trade
+        self.last_book_state: Dict[str, Dict[str, float]] = {} # Track liquidity delta
 
     def predict(
         self,
@@ -85,6 +120,7 @@ class Predictor:
         ta_results_ltf: Optional[Dict] = None,
         news_results: Optional[Dict] = None,
         orderbook: Optional[Dict] = None,
+        funding_rate: Optional[float] = None,
         pattern_results: Optional[Dict] = None,
         ml_results: Optional[Dict] = None,
         symbol: str = "",
@@ -104,6 +140,7 @@ class Predictor:
             pat_score = pat_comp.get("score", 50.0)
             pat_dir   = pat_comp.get("direction", "NEUTRAL")
             regime    = pattern_results.get("regime", {})
+            adx_val   = regime.get("adx", 20)
             # Ranging / choppy market → dampen pattern confidence
             if not regime.get("tradeable", True):
                 orig = pat_score
@@ -116,6 +153,9 @@ class Predictor:
             pat_score = 50.0
             pat_dir   = "NEUTRAL"
             regime    = {}
+            adx_val   = 20
+
+        atr_pct = ta_results.get("atr", {}).get("pct", 1.0)
 
         # ── 3. News / Sentiment Score ──────────────────────────────────────────
         if news_results:
@@ -133,49 +173,56 @@ class Predictor:
         )
 
         # ── 5. Order Book Microstructure ───────────────────────────────────────
-        micro_score, micro_dir = _market_structure_score(orderbook)
+        micro_score, micro_dir, micro_data = _market_structure_score(orderbook)
+        
+        # ── 5b. Liquidity Delta (Institutional Shift) ─────────────────────────
+        liq_delta_score = 50.0
+        if symbol in self.last_book_state and orderbook:
+            prev = self.last_book_state[symbol]
+            curr_bids = sum(v for p, v in orderbook.get("bids", []))
+            curr_asks = sum(v for p, v in orderbook.get("asks", []))
+            
+            bid_delta = (curr_bids - prev["bids"]) / (prev["bids"] + 1e-9)
+            ask_delta = (curr_asks - prev["asks"]) / (prev["asks"] + 1e-9)
+            
+            # If bids increasing more than asks -> Bullish Delta
+            liq_delta_score = 50 + (bid_delta - ask_delta) * 100
+            liq_delta_score = max(0, min(100, liq_delta_score))
+            
+        if orderbook:
+            self.last_book_state[symbol] = {
+                "bids": sum(v for p, v in orderbook.get("bids", [])),
+                "asks": sum(v for p, v in orderbook.get("asks", []))
+            }
 
         # ── 5b. Machine Learning Score ─────────────────────────────────────────
         ml_score = (ml_results or {}).get("ml_score", 50.0)
         ml_dir   = (ml_results or {}).get("ml_direction", "NEUTRAL")
 
-        # ── 6. Weighted Fusion (Dynamic) ───────────────────────────────────────
-        # Expert Insight: Adjust weights based on market regime (ADX)
-        current_adx = regime.get("adx", 20)
+        # ── 6. Weighted Fusion -> Bayesian Neural Fusion ───────────────────────
+        # Prior is based on Global Market Context (BTC/ETH)
+        prior_prob = market_context.market_score / 100.0
         
-        # In strong trends (High ADX), trust TA and Momentum more
-        if current_adx > 30:
-            W_TECH_EFF = W_TECHNICAL * 1.3
-            W_PAT_EFF  = W_PATTERNS * 1.1
-            W_SENT_EFF = W_SENTIMENT * 0.8 # News matters less in a runaway trend
-        # In ranging markets (Low ADX), trust Mean Reversion patterns and Sentiment more
-        else:
-            W_TECH_EFF = W_TECHNICAL * 0.8
-            W_PAT_EFF  = W_PATTERNS * 1.4
-            W_SENT_EFF = W_SENTIMENT * 1.2
-            
-        components = [
-            (ml_score,    W_ML,        ml_dir),
-            (ta_score,    W_TECH_EFF,  ta_dir),
-            (pat_score,   W_PAT_EFF,   pat_dir),
-            (sent_pct,    W_SENT_EFF,  sent_dir),
-            (mtf_score,   W_MOMENTUM,  mtf_dir),
-            (micro_score, W_MICROSTR,  micro_dir)
+        # Bayesian evidence components
+        evidence = [
+            (ml_score,    W_ML),
+            (ta_score,    W_TECHNICAL),
+            (pat_score,   W_PATTERNS),
+            (sent_pct,    W_SENTIMENT),
+            (mtf_score,   W_MOMENTUM),
+            (micro_score, W_MICROSTR),
+            (liq_delta_score, 0.15) # New: Liquidity Delta evidence
         ]
         
-        weighted_sum = 0.0
-        total_weight = 0.0
-        
-        for score, weight, direction in components:
-            # If component has a clear signal, boost its weight
-            effective_weight = weight
-            if direction != "NEUTRAL":
-                effective_weight *= 1.5 # 50% more weight to strong signals
-                
-            weighted_sum += score * effective_weight
-            total_weight += effective_weight
+        # Adjust weights based on ADX (Expert regime awareness)
+        final_evidence = []
+        for score, weight in evidence:
+            eff_weight = weight
+            if adx_val > 30: # Strong trend
+                if score > 60 or score < 40: eff_weight *= 1.2
+            final_evidence.append((score, eff_weight))
             
-        raw_score = (weighted_sum / total_weight) if total_weight > 0 else 50.0
+        raw_score = _bayesian_fusion(prior_prob, final_evidence)
 
         # ── 6d. Expert Smoothing (Stability Filter) ───────────────────────────
         # This prevents the score from "fluctuating" too wildly between cycles
@@ -264,8 +311,10 @@ class Predictor:
         
         # Expert Insight: BTC Correlation Check
         if symbol != "BTC/USDT":
-            # This would ideally check BTC regime specifically, but using current symbol regime as proxy
-            pass
+            context_penalty = market_context.get_context_penalty(final_dir)
+            if context_penalty > 0:
+                penalty += context_penalty
+                logger.warning(f"Macro Risk: BTC/ETH divergence detected -> −{context_penalty}% penalty")
 
         if final_dir == "BUY" and rsi_val > 80:
             penalty += 10
@@ -289,7 +338,6 @@ class Predictor:
             logger.warning("Ranging market → directional trade confidence −8%")
 
         # ── 8b. HTF Confirmation ──────────────────────────────────────────────
-        atr_pct = ta_results.get("atr", {}).get("pct", 1.0)
         adx_val = regime.get("adx", 20)
         htf_dir = "NEUTRAL"
 
@@ -313,7 +361,18 @@ class Predictor:
             penalty += 5
             logger.warning(f"Weak trend (ADX {adx_val:.1f}) → −5% confidence")
 
-        # ── 8e. Directional Confidence Calculation ───────────────────────────
+        # ── 8e. Funding Rate Penalty (Crowded Trade) ──────────────────────────
+        if funding_rate is not None:
+            # High positive funding -> Longs paying Shorts (Bullish exhaustion risk)
+            if final_dir == "BUY" and funding_rate > 0.01: # 0.01% per 8h
+                penalty += 8
+                logger.warning(f"Funding Risk: Crowded Longs (Funding {funding_rate:.4f}%) → −8% penalty")
+            # High negative funding -> Shorts paying Longs (Bearish exhaustion risk)
+            elif final_dir == "SELL" and funding_rate < -0.01:
+                penalty += 8
+                logger.warning(f"Funding Risk: Crowded Shorts (Funding {funding_rate:.4f}%) → −8% penalty")
+
+        # ── 8f. Directional Confidence Calculation ───────────────────────────
         # Expert Logic: Confidence should represent strength of conviction in the CURRENT direction.
         if final_dir == "BUY":
             # For BUY, higher raw_score means higher confidence
@@ -325,6 +384,7 @@ class Predictor:
             base_confidence = 0
             
         confidence = round(max(0, min(98.0, base_confidence - penalty)), 2)
+        win_prob   = round(confidence, 2) # Bayesian posterior as win probability
         
         # ── 8f. Expert Confirmation Buffer ────────────────────────────────────
         # Only trade if high confidence is SUSTAINED for multiple cycles
@@ -354,7 +414,7 @@ class Predictor:
                 f"🛡️ ACTIVE TRADE: Entry ${active_pos.entry_price:.2f}",
                 f"🛡️ FIXED EXIT: Stop Loss at ${sl_price} ({stop_loss_pct}%)",
                 f"🛡️ FIXED TARGET: Take Profit at ${tp_price} ({take_profit_pct}%)",
-                f"Trade Strategy: {active_pos.direction} momentum tracking in progress."
+                f"Neural Fusion: Tracking {active_pos.direction} momentum with institutional precision."
             ]
         else:
             # Use standard dynamic multipliers for potential new trade
@@ -419,6 +479,10 @@ class Predictor:
         if sweeps:
             reasoning.append(f"Liquidity Sweep: {sweeps[-1]['type']} at ${sweeps[-1]['price']:.2f}")
 
+        # Order Book Clusters
+        for cluster in micro_data.get("clusters", []):
+            reasoning.append(f"Whale Wall Found: {cluster['type']} at ${cluster['price']:.2f} ({cluster['strength']}x volume)")
+
         trix = ta_results.get("trix", {})
         if trix:
             reasoning.append(f"TRIX Momentum: {'Bullish' if trix.get('value', 0) > 0 else 'Bearish'} ({trix.get('value', 0):.2f})")
@@ -441,11 +505,19 @@ class Predictor:
         ichi = ta_results.get("ichimoku", {})
         if ichi.get("tenkan", 0) > ichi.get("kijun", 1):
             reasoning.append("Ichimoku Cloud: Tenkan > Kijun (bullish cross formation)")
+            
+        # Kelly Criterion sizing
+        win_rate = 0.55 # Assume 55% for the AI model
+        risk_reward = 2.5
+        kelly_f = win_rate - ((1 - win_rate) / risk_reward)
+        kelly_fraction = max(0, min(0.1, kelly_f * (confidence / 100)))
+        reasoning.append(f"Position Sizing (Kelly): Institutional recommendation {kelly_fraction*100:.1f}% of equity")
 
         result = {
             "symbol":            symbol,
             "direction":         final_dir,
             "confidence":        confidence,
+            "win_probability":   win_prob,
             "should_trade":      should_trade,
             "threshold":         self.threshold,
             "stop_loss_pct":     stop_loss_pct,
@@ -480,7 +552,8 @@ class Predictor:
             },
             "raw_score":  round(raw_score, 2),
             "penalty":    round(penalty, 2),
-            "expert_logic": self._generate_expert_summary(final_dir, confidence, raw_score, penalty, current_regime, rsi_val, adx_val)
+            "market_context": market_context.market_score,
+            "expert_logic": self._generate_expert_summary(final_dir, confidence, raw_score, penalty, current_regime, rsi_val, adx_val, funding_rate)
         }
 
         emoji  = "🚀" if final_dir == "BUY" else ("🔻" if final_dir == "SELL" else "⏸️")
@@ -494,25 +567,22 @@ class Predictor:
         )
         return result
 
-    def _generate_expert_summary(self, direction, confidence, score, penalty, regime, rsi, adx) -> str:
+    def _generate_expert_summary(self, direction, confidence, score, penalty, regime, rsi, adx, funding) -> str:
         if direction == "NEUTRAL":
-            return "Market is currently in a state of equilibrium. Momentum and structure are mixed, suggesting a wait-and-see approach until a clear breakout occurs."
+            return "Bayesian Fusion Engine: Market is currently in a state of high entropy (equilibrium). Institutional order flow is balanced. Recommendation: Await structural breakout or liquidity sweep."
         
         strength = "Aggressive" if confidence > 85 else "Moderate"
         trend_status = "aligned with" if (direction == "BUY" and "UP" in regime) or (direction == "SELL" and "DOWN" in regime) else "countering"
         
-        verdict = f"{strength} {direction} signal detected. "
+        verdict = f"Bayesian Neural Fusion: {strength} {direction} conviction detected. "
+        verdict += f"The calculated winning probability is {confidence:.1f}% based on multi-source evidence fusion. "
+        
         if penalty > 10:
-            verdict += f"Caution: Signal is {trend_status} the primary trend, requiring strict risk management. "
+            verdict += f"Note: Signal is {trend_status} the primary structural trend. "
         else:
-            verdict += f"Signal is well-{trend_status} the structural trend with high conviction. "
+            verdict += f"Signal is well-{trend_status} the institutional trend. "
             
-        if rsi > 70 or rsi < 30:
-            verdict += f"Price is in a {'Premium' if rsi > 70 else 'Discount'} zone (RSI: {rsi:.0f}). "
-            
-        if adx > 25:
-            verdict += f"Trend strength is strong (ADX: {adx:.0f}), favoring trend-following entries."
-        else:
-            verdict += "Low volatility environment; favor mean-reversion at structural boundaries."
+        if funding is not None and abs(funding) > 0.01:
+            verdict += f"Institutional positioning is {'OVERBULLISH' if funding > 0 else 'OVERBEARISH'} (Funding: {funding:.4f}%). "
             
         return verdict

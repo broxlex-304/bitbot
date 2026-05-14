@@ -102,6 +102,43 @@ def _ichimoku(df: pd.DataFrame):
     chikou = df["close"].shift(-26)
     return tenkan, kijun, senkou_a, senkou_b, chikou
 
+def _order_flow_delta(df: pd.DataFrame) -> pd.Series:
+    """
+    Simulate Cumulative Volume Delta (CVD) using price action intensity.
+    Measures aggressive buyers vs passive sellers.
+    """
+    # Body intensity: Close - Open
+    # Wick intensity: (Close - Low) - (High - Close)
+    delta = ((df["close"] - df["open"]) + (df["close"] - df["low"]) - (df["high"] - df["close"])) / (df["high"] - df["low"] + 1e-9)
+    return (delta * df["volume"]).cumsum()
+
+def _vsa_analysis(df: pd.DataFrame) -> List[str]:
+    """
+    Volume Spread Analysis (VSA).
+    Detects 'Effort vs Result' and 'Stopping Volume'.
+    """
+    patterns = []
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    avg_vol = df["volume"].rolling(20).mean().iloc[-1]
+    spread = last["high"] - last["low"]
+    avg_spread = (df["high"] - df["low"]).rolling(20).mean().iloc[-1]
+    
+    # 1. Effort vs Result (Bearish)
+    if last["volume"] > avg_vol * 1.5 and abs(last["close"] - last["open"]) < avg_spread * 0.5:
+        patterns.append("Effort without Result (Bearish Absorption)")
+        
+    # 2. Stopping Volume (Bullish)
+    if last["close"] < last["low"] + (spread * 0.3) and last["volume"] > avg_vol * 2.0:
+        patterns.append("Stopping Volume (Bullish Reversal)")
+        
+    # 3. Supply Coming In
+    if last["high"] > prev["high"] and last["close"] < last["open"] and last["volume"] > avg_vol:
+        patterns.append("Supply Overcoming Demand")
+        
+    return patterns
+
 def _support_resistance(df: pd.DataFrame, window: int = 50) -> Tuple[float, float]:
     """Expert: Increased window from 20 to 50 for more significant structural levels."""
     recent = df.tail(window)
@@ -402,6 +439,27 @@ class TechnicalAnalyzer:
         elif uo < 30: signals.extend([1, 1])  # Oversold
         elif uo > 50: signals.append(1)
         elif uo < 50: signals.append(-1)
+
+        # ── Institutional Order Flow (CVD Simulation) ─────────────────────────
+        cvd = _order_flow_delta(df)
+        cvd_ema = _ema(cvd, 20)
+        cvd_val = cvd.iloc[-1]
+        cvd_slope = cvd_val - cvd.iloc[-5]
+        results["order_flow"] = {"cvd": cvd_val, "cvd_slope": cvd_slope}
+        
+        if cvd_val > cvd_ema.iloc[-1]:
+            signals.append(1)
+            if cvd_slope > 0: signals.append(1) # Strong aggressive buying
+        elif cvd_val < cvd_ema.iloc[-1]:
+            signals.append(-1)
+            if cvd_slope < 0: signals.append(-1) # Strong aggressive selling
+
+        # ── VSA Patterns ──────────────────────────────────────────────────────
+        vsa = _vsa_analysis(df)
+        results["vsa"] = vsa
+        for p in vsa:
+            if "Bullish" in p or "Demand" in p: signals.extend([1, 1])
+            elif "Bearish" in p or "Supply" in p: signals.extend([-1, -1])
 
         # ── Composite Score ────────────────────────────────────────────────────
         # Technical signals summary

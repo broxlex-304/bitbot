@@ -163,6 +163,24 @@ class ExchangeClient:
             logger.error(f"Orderbook fetch error: {e}")
             return {}
 
+    def fetch_funding_rate(self, symbol: str) -> Optional[float]:
+        """Fetch current funding rate (for perpetuals)."""
+        if not self.ensure_connected():
+            return None
+        symbol = self._normalize_symbol(symbol)
+        try:
+            # Some exchanges use fetchFundingRate, others fetchFundingRates
+            if hasattr(self.exchange, 'fetchFundingRate'):
+                data = self.exchange.fetch_funding_rate(symbol)
+                return data.get('fundingRate')
+            elif hasattr(self.exchange, 'fetchFundingRates'):
+                data = self.exchange.fetch_funding_rates([symbol])
+                return data.get(symbol, {}).get('fundingRate')
+            return None
+        except Exception as e:
+            logger.error(f"Funding rate fetch error [{symbol}]: {e}")
+            return None
+
     def fetch_balance(self) -> Dict:
         if self.paper_mode:
             return {"USDT": 1000.0, "mode": "paper"}   # Simulated balance

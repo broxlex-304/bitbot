@@ -103,8 +103,15 @@ export default function TradingChart() {
       initTradingView();
     }
 
-    return () => { if (chartRef.current) try { chartRef.current.remove(); } catch(e){} };
-  }, [chartMode]);
+    return () => {
+      if (chartRef.current) {
+        try { chartRef.current.remove(); chartRef.current = null; } catch(e){}
+      }
+      // Clear the container to ensure no remnants of TradingView are left
+      if (tvContainerRef.current) tvContainerRef.current.innerHTML = '';
+      if (containerRef.current) containerRef.current.innerHTML = '';
+    };
+  }, [chartMode, botState.symbol]); // Also re-init on symbol change to keep TV synced
 
   // Update Lightweight Chart when candles or prediction change
   useEffect(() => {
@@ -218,7 +225,7 @@ export default function TradingChart() {
       {chartMode === 'lightweight' ? (
         <div ref={containerRef} style={{ height: 420, width: '100%' }} />
       ) : (
-        <div id="tv_chart_container" style={{ height: 420, width: '100%' }} />
+        <div id="tv_chart_container" ref={tvContainerRef} style={{ height: 420, width: '100%' }} />
       )}
     </div>
   );

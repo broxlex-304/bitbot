@@ -253,11 +253,18 @@ class Predictor:
         rsi_val = ta_results.get("rsi", {}).get("value", 50)
         penalty = 0.0
 
+        # Expert Insight: Market Regime & Trend Alignment
+        if final_dir == "BUY" and current_regime == "TRENDING_DOWN":
+            penalty += 15
+            logger.warning(f"Trend Risk: Counter-trend BUY attempt during TRENDING_DOWN -> −15% penalty")
+        elif final_dir == "SELL" and current_regime == "TRENDING_UP":
+            penalty += 15
+            logger.warning(f"Trend Risk: Counter-trend SELL attempt during TRENDING_UP -> −15% penalty")
+        
         # Expert Insight: BTC Correlation Check
         if symbol != "BTC/USDT":
-            if final_dir == "BUY" and current_regime == "TRENDING_DOWN":
-                penalty += 15
-                logger.warning(f"BTC Correlation Risk: Altcoin BUY signal during market downtrend -> −15% penalty")
+            # This would ideally check BTC regime specifically, but using current symbol regime as proxy
+            pass
 
         if final_dir == "BUY" and rsi_val > 80:
             penalty += 10
@@ -464,6 +471,7 @@ class Predictor:
             },
             "raw_score":  round(raw_score, 2),
             "penalty":    round(penalty, 2),
+            "expert_logic": self._generate_expert_summary(final_dir, confidence, raw_score, penalty, current_regime, rsi_val, adx_val)
         }
 
         emoji  = "🚀" if final_dir == "BUY" else ("🔻" if final_dir == "SELL" else "⏸️")
@@ -475,9 +483,27 @@ class Predictor:
             f"Votes: {buy_votes}↑/{sell_votes}↓",
             result,
         )
-        if not should_trade:
-            logger.thinking(
-                f"Below threshold ({confidence}% < {self.threshold}%) — "
-                f"monitoring {symbol}, next cycle will re-evaluate"
-            )
         return result
+
+    def _generate_expert_summary(self, direction, confidence, score, penalty, regime, rsi, adx) -> str:
+        if direction == "NEUTRAL":
+            return "Market is currently in a state of equilibrium. Momentum and structure are mixed, suggesting a wait-and-see approach until a clear breakout occurs."
+        
+        strength = "Aggressive" if confidence > 85 else "Moderate"
+        trend_status = "aligned with" if (direction == "BUY" and "UP" in regime) or (direction == "SELL" and "DOWN" in regime) else "countering"
+        
+        verdict = f"{strength} {direction} signal detected. "
+        if penalty > 10:
+            verdict += f"Caution: Signal is {trend_status} the primary trend, requiring strict risk management. "
+        else:
+            verdict += f"Signal is well-{trend_status} the structural trend with high conviction. "
+            
+        if rsi > 70 or rsi < 30:
+            verdict += f"Price is in a {'Premium' if rsi > 70 else 'Discount'} zone (RSI: {rsi:.0f}). "
+            
+        if adx > 25:
+            verdict += f"Trend strength is strong (ADX: {adx:.0f}), favoring trend-following entries."
+        else:
+            verdict += "Low volatility environment; favor mean-reversion at structural boundaries."
+            
+        return verdict

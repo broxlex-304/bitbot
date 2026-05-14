@@ -416,10 +416,8 @@ class TechnicalAnalyzer:
         # Score: 0–100 (centered at 50)
         score = ((bull_weight / total_weight) * 100) if total_weight > 0 else 50.0
         
-        # Sharpening: If it's a clear trend, push it further
-        if abs(score - 50) > 10:
-            score = 50 + (score - 50) * 1.15
-            score = max(0, min(100, score))
+        # Removed redundant sharpening. Predictor now handles final confidence scaling.
+        score = max(0, min(100, score))
 
         if score >= 60: # Lowered threshold slightly to be more responsive
             direction = "BUY"

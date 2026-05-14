@@ -114,6 +114,15 @@ export default function PredictionPanel() {
         </>
       )}
 
+      {/* Market Logic Verdict (New Section) */}
+      <div className="divider" />
+      <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 12, border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ fontSize: 11, color: 'var(--primary)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>💎 Market Logic & Expert Verdict</div>
+          <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6, margin: 0, fontWeight: 500 }}>
+              {prediction.expert_logic || "Analyzing market microstructure... Synthesis in progress."}
+          </p>
+      </div>
+
       {/* News sentiment */}
       {!!newsData.sentiment && (
         <>

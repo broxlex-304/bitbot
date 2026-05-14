@@ -77,17 +77,20 @@ export default function Topbar() {
     <header className="topbar">
       {/* Symbol + price */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <select
-          className="input-field" 
-          value={botState.symbol} 
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleSymbolChange(e as any)}
-          style={{ width: 190, fontWeight: 800, padding: '4px 8px', height: 32 }}
-        >
-          {symbolsList.map(s => <option key={s.symbol} value={s.symbol}>{s.label}</option>)}
-        </select>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontSize: 9, color: 'var(--primary)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1px' }}>PRO Terminal v1.2</div>
+            <select
+                className="input-field" 
+                value={botState.symbol} 
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleSymbolChange(e as any)}
+                style={{ width: 190, fontWeight: 800, padding: '4px 8px', height: 32, marginTop: 2 }}
+            >
+                {symbolsList.map(s => <option key={s.symbol} value={s.symbol}>{s.label}</option>)}
+            </select>
+        </div>
         
         {currentPrice > 0 && (
-          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: 'var(--green)' }}>
+          <div style={{ fontSize: 18, fontWeight: 900, fontFamily: 'JetBrains Mono, monospace', color: 'var(--green)', textShadow: '0 0 10px var(--green-glow)' }}>
             ${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
         )}

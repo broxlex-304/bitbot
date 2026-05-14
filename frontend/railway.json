@@ -9,6 +9,6 @@
     "numReplicas": 1,
     "sleepApplication": false,
     "restartPolicyType": "ON_FAILURE",
-    "forced_redeploy_at": "2026-05-14T22:51:25Z"
+    "forced_redeploy_at": "2026-05-14T23:04:55Z"
   }
 }

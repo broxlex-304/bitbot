@@ -11,21 +11,6 @@ import LogFeed from '@/components/LogFeed';
 import PositionsPanel from '@/components/PositionsPanel';
 import SettingsPanel from '@/components/SettingsPanel';
 
-/* ─── Stat Card ─────────────────────────────────────────────────────────────── */
-function StatCard({ label, value, sub, accent, icon }: {
-  label: string; value: string | number; sub?: string; accent?: string; icon?: string;
-}) {
-  return (
-    <div className="stat-card" style={{ '--accent': accent || 'var(--primary)' } as React.CSSProperties}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div className="stat-label">{label}</div>
-        {icon && <span style={{ fontSize: 20, opacity: 0.7 }}>{icon}</span>}
-      </div>
-      <div className="stat-value">{value}</div>
-      {sub && <div className="stat-sub">{sub}</div>}
-    </div>
-  );
-}
 
 /* ─── News Card (top-level, no duplicate) ────────────────────────────────────── */
 function NewsCard() {

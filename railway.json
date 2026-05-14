@@ -11,6 +11,6 @@
     "restartPolicyType": "ON_FAILURE",
     "healthCheckPath": "/health",
     "serviceName": "bitbot-pro-binance",
-    "forced_redeploy_at": "2026-05-15T00:36:30Z"
+    "forced_redeploy_at": "2026-05-15T00:43:00Z"
   }
 }

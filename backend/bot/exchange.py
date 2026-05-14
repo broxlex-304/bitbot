@@ -138,11 +138,15 @@ class ExchangeClient:
             logger.error(f"Balance fetch error: {e}")
             return {}
 
-    def create_market_buy(self, symbol: str, amount_usdt: float) -> Optional[Dict]:
+    def create_market_buy(self, symbol: str, amount_usdt: Optional[float] = None, amount: Optional[float] = None) -> Optional[Dict]:
+        if not amount and not amount_usdt:
+            return None
+
         if self.paper_mode:
             ticker = self.fetch_ticker(symbol)
             price  = ticker.get("last", 0)
-            amount = amount_usdt / price if price else 0
+            if not amount:
+                amount = amount_usdt / price if price else 0
             order  = {
                 "id": f"PAPER_{symbol.replace('/','')}_{pd.Timestamp.now().strftime('%H%M%S')}",
                 "symbol": symbol, "side": "buy", "type": "market",
@@ -155,8 +159,12 @@ class ExchangeClient:
             price  = ticker.get("last", 0)
             if not price:
                 return None
-            amount = self.exchange.amount_to_precision(symbol, amount_usdt / price)
-            order  = self.exchange.create_market_buy_order(symbol, float(amount))
+            
+            if not amount:
+                amount = amount_usdt / price
+            
+            amount_str = self.exchange.amount_to_precision(symbol, amount)
+            order  = self.exchange.create_market_buy_order(symbol, float(amount_str))
             logger.trade(f"🟢 LIVE BUY [{symbol}] @ ${price:.2f}", order)
             return order
         except Exception as e:

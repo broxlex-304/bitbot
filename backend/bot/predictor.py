@@ -334,13 +334,22 @@ class Predictor:
             logger.info(f"Signal Pending: Sustaining conviction... ({self.confirmation_counts[symbol]}/{self.req_confirmations})")
 
         # ── 9. Adaptive Risk Parameters ────────────────────────────────────────
-        # Tighter SL in strong trends, wider in weaker ones
-        sl_multiplier = 1.2 if adx_val > 30 else 1.8
-        stop_loss_pct   = round(max(0.8, min(5.0, atr_pct * sl_multiplier)), 2)
-        take_profit_pct = round(stop_loss_pct * 2.2, 2)   # 2.2:1 R/R
+        # ── 9. Adaptive Risk Parameters (Expert Stabilized) ───────────────────
+        # Use more standard multipliers to prevent "stop-loss hunting" by market noise
+        # Tighter SL in strong trends (1.5x ATR), wider in weaker/ranging ones (2.0x ATR)
+        sl_multiplier = 1.5 if adx_val > 30 else 2.0
+        
+        # Ensure SL is at least 1.0% to prevent micro-stops on low-volatility coins
+        stop_loss_pct   = round(max(1.0, min(6.0, atr_pct * sl_multiplier)), 2)
+        
+        # Expert Insight: 2.5:1 Reward-to-Risk ratio for institutional-grade edge
+        take_profit_pct = round(stop_loss_pct * 2.5, 2)
 
         # ── 10. Reasoning Build ────────────────────────────────────────────────
-        reasoning: List[str] = []
+        reasoning: List[str] = [
+            f"Risk Model: SL set at {stop_loss_pct}% ({sl_multiplier}x ATR volatility)",
+            f"Target Model: TP set at {take_profit_pct}% (2.5:1 Reward/Risk ratio)"
+        ]
         if ml_dir != "NEUTRAL":
             reasoning.append(f"AI ML: {ml_dir} signal (Random Forest probability: {ml_score:.1f}%)")
         if ta_dir != "NEUTRAL":

@@ -53,14 +53,15 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def _stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
     low_min = df["low"].rolling(window=k_period).min()
     high_max = df["high"].rolling(window=k_period).max()
-    k = 100 * (df["close"] - low_min) / (high_max - low_min)
+    # Added 1e-9 to prevent division by zero in flat markets
+    k = 100 * (df["close"] - low_min) / (high_max - low_min + 1e-9)
     d = k.rolling(window=d_period).mean()
     return k, d
 
 def _williams_r(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high_max = df["high"].rolling(window=period).max()
     low_min = df["low"].rolling(window=period).min()
-    return -100 * (high_max - df["close"]) / (high_max - low_min)
+    return -100 * (high_max - df["close"]) / (high_max - low_min + 1e-9)
 
 def _cci(df: pd.DataFrame, period: int = 20) -> pd.Series:
     tp = (df["high"] + df["low"] + df["close"]) / 3
@@ -101,10 +102,11 @@ def _ichimoku(df: pd.DataFrame):
     chikou = df["close"].shift(-26)
     return tenkan, kijun, senkou_a, senkou_b, chikou
 
-def _support_resistance(df: pd.DataFrame, window: int = 20) -> Tuple[float, float]:
+def _support_resistance(df: pd.DataFrame, window: int = 50) -> Tuple[float, float]:
+    """Expert: Increased window from 20 to 50 for more significant structural levels."""
     recent = df.tail(window)
-    support = recent["low"].min()
-    resistance = recent["high"].max()
+    support = float(recent["low"].min())
+    resistance = float(recent["high"].max())
     return support, resistance
 
 def _pivot_points(df: pd.DataFrame) -> Dict[str, float]:

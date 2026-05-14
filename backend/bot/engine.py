@@ -149,22 +149,26 @@ class TradingEngine:
     # ─── Main Loop ────────────────────────────────────────────────────────────
 
     async def _run_loop(self):
-        interval = CYCLE_INTERVAL.get(self.timeframe, 900)
         self._set_status(BotStatus.RUNNING, "Starting analysis loop...")
 
         while self.running:
             try:
+                # Expert Logic: Align with candle close (e.g. run at 10:05:01 for 5m TF)
+                now = datetime.utcnow().timestamp()
+                interval = CYCLE_INTERVAL.get(self.timeframe, 60)
+                wait_time = interval - (now % interval) + 1 # +1s buffer for exchange data
+                
+                wait_msg = f"⏳ Waiting {wait_time:.1f}s to align with next {self.timeframe} candle close..."
+                self._set_status(BotStatus.WAITING, wait_msg)
+                logger.info(wait_msg)
+                
+                await asyncio.sleep(wait_time)
+                
+                if not self.running: break
+                
                 await self._run_cycle()
                 self.cycle_count += 1
                 await broadcast_event("cycle_complete", {"cycle": self.cycle_count})
-
-                if not self.running:
-                    break
-
-                wait_msg = f"⏳ Waiting {interval}s for next candle [{self.timeframe}]..."
-                self._set_status(BotStatus.WAITING, wait_msg)
-                logger.info(wait_msg)
-                await asyncio.sleep(interval)
 
             except asyncio.CancelledError:
                 break
@@ -187,15 +191,16 @@ class TradingEngine:
                 return
 
         # ── 1. Fetch OHLCV (primary + HTF) ────────────────────────────────────
+        # Professional: Fetch 500 candles to ensure EMA200/MA200 accuracy
         logger.analysis(f"Fetching OHLCV data [{self.symbol}]...")
         df_primary = await asyncio.get_event_loop().run_in_executor(
-            None, exchange_client.fetch_ohlcv, self.symbol, primary, 250
+            None, exchange_client.fetch_ohlcv, self.symbol, primary, 500
         )
         df_htf = await asyncio.get_event_loop().run_in_executor(
-            None, exchange_client.fetch_ohlcv, self.symbol, htf, 100
+            None, exchange_client.fetch_ohlcv, self.symbol, htf, 200
         ) if htf else None
         df_ltf = await asyncio.get_event_loop().run_in_executor(
-            None, exchange_client.fetch_ohlcv, self.symbol, ltf, 100
+            None, exchange_client.fetch_ohlcv, self.symbol, ltf, 200
         ) if ltf else None
 
         if df_primary is None or df_primary.empty:
@@ -267,12 +272,14 @@ class TradingEngine:
                 await broadcast_event("position_closed", c)
 
         # ── 7. Execute Trade if Signal is Confident ──────────────────────────
-        if prediction.get("should_trade") and prediction.get("direction") != "NEUTRAL":
-            direction   = prediction["direction"]
-            confidence  = prediction["confidence"]
-            sl_pct      = prediction["stop_loss_pct"]
-            tp_pct      = prediction["take_profit_pct"]
             amount_usdt = settings.trade_amount_usdt
+
+            # Expert Risk Guard: Check balance before execution
+            balance = exchange_client.fetch_balance()
+            usdt_avail = balance.get("USDT", 0)
+            if usdt_avail < amount_usdt:
+                logger.warning(f"Insufficient funds for trade: Have ${usdt_avail:.2f}, need ${amount_usdt:.2f}")
+                return
 
             # Expert Logic: Get ATR for volatility-adjusted risk
             atr_val = ta_primary.get("atr", {}).get("value")
@@ -339,7 +346,8 @@ class TradingEngine:
         """Fetches current price and updates the last candle every 2 seconds."""
         while self.running:
             try:
-                await asyncio.sleep(0.5)
+                # Respect rate limits: 2 seconds is enough for dashboard updates
+                await asyncio.sleep(2.0)
                 if not self.running:
                     break
 

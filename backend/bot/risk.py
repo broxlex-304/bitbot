@@ -44,8 +44,8 @@ class RiskManager:
         self._load_state()
 
     def _save_pos(self, pos: Position):
+        db = SessionLocal()
         try:
-            db = SessionLocal()
             existing = db.query(DBPosition).filter(DBPosition.id == pos.id).first()
             
             pos_data = pos.to_dict()
@@ -65,15 +65,16 @@ class RiskManager:
                 db.add(db_pos)
             
             db.commit()
-            db.close()
         except Exception as e:
+            db.rollback()
             logger.error(f"DB Error saving position: {e}")
+        finally:
+            db.close()
 
     def _load_state(self):
+        db = SessionLocal()
         try:
-            db = SessionLocal()
             db_positions = db.query(DBPosition).all()
-            db.close()
             
             for p in db_positions:
                 pos_dict = {
@@ -100,6 +101,8 @@ class RiskManager:
             logger.info(f"Loaded {len(self.positions)} positions from database.")
         except Exception as e:
             logger.error(f"DB Error loading state: {e}")
+        finally:
+            db.close()
 
     def open_position(
         self,
@@ -119,22 +122,30 @@ class RiskManager:
             logger.warning(f"Max open trades ({settings.max_open_trades}) reached — skipping")
             return None
 
-        if atr and atr > 0:
-            atr_sl_pct = (atr * 2.0 / entry_price) * 100
-            stop_loss_pct = max(0.5, min(5.0, atr_sl_pct))
-            take_profit_pct = max(take_profit_pct, stop_loss_pct * 2.0)
-            logger.info(f"Expert Risk Engine: Dynamic SL: {stop_loss_pct:.2f}% | TP: {take_profit_pct:.2f}%")
+        # Removed redundant re-calculation. Predictor now handles dynamic SL/TP.
+        # This prevents the "moving stoploss" bug where predicted SL/TP differed from actual.
 
         amount = amount_usdt / entry_price
 
         if direction == "BUY":
-            sl_price = round(entry_price * (1 - stop_loss_pct / 100), 8)
-            tp_price = round(entry_price * (1 + take_profit_pct / 100), 8)
+            sl_price = entry_price * (1 - stop_loss_pct / 100)
+            tp_price = entry_price * (1 + take_profit_pct / 100)
         else:  # SELL
-            sl_price = round(entry_price * (1 + stop_loss_pct / 100), 8)
-            tp_price = round(entry_price * (1 - take_profit_pct / 100), 8)
+            sl_price = entry_price * (1 + stop_loss_pct / 100)
+            tp_price = entry_price * (1 - take_profit_pct / 100)
 
-        pos_id = f"{symbol.replace('/', '')}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        # Expert Rounding: Use exchange-specific price precision
+        if exchange_client.exchange and symbol in exchange_client.exchange.markets:
+             sl_price = float(exchange_client.exchange.price_to_precision(symbol, sl_price))
+             tp_price = float(exchange_client.exchange.price_to_precision(symbol, tp_price))
+        else:
+             sl_price = round(sl_price, 8)
+             tp_price = round(tp_price, 8)
+
+        # Add random suffix to ID to prevent collision
+        import random
+        suffix = random.randint(100, 999)
+        pos_id = f"{symbol.replace('/', '')}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{suffix}"
         pos = Position(
             id=pos_id,
             symbol=symbol,
@@ -191,12 +202,16 @@ class RiskManager:
         if pos.direction == "BUY":
             exchange_client.create_market_sell(pos.symbol, amount=pos.amount)
         else:
-            exchange_client.create_market_buy(pos.symbol, amount_usdt=pos.amount_usdt)
+            # Corrected: Use base amount to close short position, not amount_usdt
+            exchange_client.create_market_buy(pos.symbol, amount=pos.amount)
 
         if pos.direction == "BUY":
             pnl_pct  = ((close_price - pos.entry_price) / pos.entry_price) * 100
         else:
             pnl_pct  = ((pos.entry_price - close_price) / pos.entry_price) * 100
+            
+        # Expert logic: Deduct 0.2% for estimated fees (taker + maker)
+        pnl_pct -= 0.2
         pnl_usdt = pos.amount_usdt * (pnl_pct / 100)
 
         pos.status      = reason

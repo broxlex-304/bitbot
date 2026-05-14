@@ -25,7 +25,7 @@ class ExchangeClient:
         # Remove common prefixes
         s = s.replace("BINANCE:", "").replace("MEXC:", "").replace("BYBIT:", "")
         # Remove common suffixes
-        s = s.replace("PERP", "").replace(".P", "")
+        s = s.replace("PERP", "").replace(".P", "").replace(".p", "")
         # Replace dashes/underscores with slash
         s = s.replace("-", "/").replace("_", "/")
         

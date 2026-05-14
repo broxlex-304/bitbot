@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 export default function Topbar() {
   const { botState, currentPrice, wsConnected, setBotState } = useStore();
   const [loading, setLoading] = useState(false);
-  const DEFAULT_SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
+  const DEFAULT_SYMBOLS = ['BTC/USDT', 'BTCUSDT.p', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT'];
   const [symbolsList, setSymbolsList] = useState<{symbol: string, label: string}[]>(
     DEFAULT_SYMBOLS.map(s => ({symbol: s, label: s}))
   );
@@ -74,7 +74,7 @@ export default function Topbar() {
   };
 
   return (
-    <header className="topbar">
+    <header className="topbar" style={{ flexWrap: 'wrap', height: 'auto', minHeight: 64, padding: '10px 20px', gap: 16 }}>
       {/* Symbol + price */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -115,18 +115,16 @@ export default function Topbar() {
         )}
         {botState.running ? (
           <button className="btn btn-red btn-sm" onClick={handleStop} disabled={loading}>
-            ⏹ Stop
+            ⏹ Disable Trading
           </button>
         ) : (
           <button className="btn btn-green btn-sm" onClick={handleStart} disabled={loading}>
-            ▶ Start
+            🚀 Enable Trading
           </button>
         )}
-        {botState.running && (
-          <button className="btn btn-ghost btn-sm" onClick={() => api.analyzeNow()}>
-            🔄 Analyze Now
-          </button>
-        )}
+        <button className="btn btn-ghost btn-sm" onClick={() => api.analyzeNow()}>
+          🔄 Analyze Now
+        </button>
       </div>
     </header>
   );

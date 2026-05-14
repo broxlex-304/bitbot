@@ -24,7 +24,7 @@ export default function TradingChart() {
     container.style.width = '100%';
     tvContainerRef.current.appendChild(container);
 
-    const sym = botState.symbol.replace('/', '');
+    let sym = botState.symbol.replace('/', '').replace('.p', '').replace('.P', '').replace('PERP', '');
     new window.TradingView.widget({
       "width": "100%",
       "height": "100%",

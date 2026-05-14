@@ -257,11 +257,14 @@ html, body {
 @media (max-width: 1200px) {
   .grid-4 { grid-template-columns: repeat(2,1fr); }
   .grid-main { grid-template-columns: 1fr; }
+  .chart-container { height: 450px !important; }
 }
 @media (max-width: 768px) {
   .app-layout { grid-template-columns: 1fr; }
   .sidebar { display: none; }
-  .topbar, .main-content { grid-column: 1; }
-  .main-content { padding: 14px; }
-  .grid-4,.grid-3,.grid-2 { grid-template-columns: 1fr; }
+  .topbar { grid-column: 1; padding: 10px 16px; }
+  .main-content { grid-column: 1; padding: 12px; }
+  .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+  .chart-container { height: 400px !important; }
+  .topbar > div { flex: 1 1 100%; justify-content: center; }
 }

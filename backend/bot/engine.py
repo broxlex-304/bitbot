@@ -50,6 +50,9 @@ CYCLE_INTERVAL = {
     "4h":  14400,
 }
 
+# New Global Config for Analysis
+ALWAYS_ANALYZE = True # Set to True to keep analysis loop running
+
 
 class TradingEngine:
     def __init__(self):
@@ -70,43 +73,40 @@ class TradingEngine:
         self.started_at: Optional[str] = None
         self._live_update_task: Optional[asyncio.Task] = None
         self.last_df: Optional[Any] = None  # Store last fetched DF for live updates
+        self.trading_active: bool = False # Controls order execution
+        
+        # Start core background tasks immediately on init
+        self._live_update_task = asyncio.ensure_future(self._run_live_update())
+        self._task = asyncio.ensure_future(self._run_loop())
+        self._monitor_task = asyncio.ensure_future(self._monitor_positions())
 
     # ─── Control ──────────────────────────────────────────────────────────────
 
     def start(self, symbol: str = None, timeframe: str = None) -> bool:
-        if self.running:
-            logger.warning("Bot is already running")
+        if self.trading_active:
+            logger.warning("Bot trading is already active")
             return False
 
-        # Normalize symbol if provided
         if symbol:
             self.symbol = exchange_client._normalize_symbol(symbol)
         self.timeframe = timeframe or self.timeframe
-        self.running   = True
+        self.trading_active = True
+        self.running = True # Keep for backwards compatibility
         self.started_at = datetime.utcnow().isoformat() + "Z"
 
         logger.success(
-            f"🚀 BitBot started | Symbol: {self.symbol} | TF: {self.timeframe} "
+            f"🚀 BitBot TRADING ACTIVE | Symbol: {self.symbol} | TF: {self.timeframe} "
             f"| Confidence threshold: {self.predictor.threshold}%"
         )
-
-        self._task         = asyncio.ensure_future(self._run_loop())
-        self._monitor_task = asyncio.ensure_future(self._monitor_positions())
-        self._live_update_task = asyncio.ensure_future(self._run_live_update())
         return True
 
     def stop(self) -> bool:
-        if not self.running:
+        if not self.trading_active:
             return False
+        self.trading_active = False
         self.running = False
-        if self._task:
-            self._task.cancel()
-        if self._monitor_task:
-            self._monitor_task.cancel()
-        if self._live_update_task:
-            self._live_update_task.cancel()
-        self._set_status(BotStatus.IDLE, "Bot stopped by user")
-        logger.info("⏹️ Bot stopped")
+        self._set_status(BotStatus.IDLE, "Trading disabled by user")
+        logger.info("⏹️ Trading stopped")
         return True
 
     def pause(self) -> bool:
@@ -120,10 +120,10 @@ class TradingEngine:
     def resume(self) -> bool:
         if self.status != BotStatus.PAUSED:
             return False
+        self.trading_active = True
         self.running = True
-        self._task = asyncio.ensure_future(self._run_loop())
-        self._set_status(BotStatus.RUNNING, "Bot resumed")
-        logger.success("▶️ Bot resumed")
+        self._set_status(BotStatus.RUNNING, "Trading resumed")
+        logger.success("▶️ Trading resumed")
         return True
 
     def update_settings(self, **kwargs):
@@ -153,32 +153,27 @@ class TradingEngine:
     # ─── Main Loop ────────────────────────────────────────────────────────────
 
     async def _run_loop(self):
-        self._set_status(BotStatus.RUNNING, "Starting analysis loop...")
+        self._set_status(BotStatus.RUNNING, "Starting persistent analysis engine...")
 
-        while self.running:
+        while True: # Always run analysis
             try:
-                # Expert Logic: Align with candle close (e.g. run at 10:05:01 for 5m TF)
+                # Expert Logic: Align with candle close
                 now = datetime.utcnow().timestamp()
                 interval = CYCLE_INTERVAL.get(self.timeframe, 60)
-                wait_time = interval - (now % interval) + 1 # +1s buffer for exchange data
+                wait_time = interval - (now % interval) + 1 
                 
-                wait_msg = f"⏳ Waiting {wait_time:.1f}s to align with next {self.timeframe} candle close..."
-                self._set_status(BotStatus.WAITING, wait_msg)
-                logger.info(wait_msg)
+                # Update status but don't change status Enum to WAITING if we are trading
+                display_msg = f"⏳ Next analysis in {wait_time:.1f}s | Trading: {'ON' if self.trading_active else 'OFF'}"
+                await broadcast_event("status_update", {"status": self.status.value, "message": display_msg})
                 
                 await asyncio.sleep(wait_time)
-                
-                if not self.running: break
                 
                 await self._run_cycle()
                 self.cycle_count += 1
                 await broadcast_event("cycle_complete", {"cycle": self.cycle_count})
 
-            except asyncio.CancelledError:
-                break
             except Exception as e:
                 logger.error(f"Engine loop error: {e}")
-                self._set_status(BotStatus.ERROR, f"Error: {e}")
                 await asyncio.sleep(30)
 
     async def _run_cycle(self):
@@ -278,14 +273,14 @@ class TradingEngine:
             for c in closed:
                 await broadcast_event("position_closed", c)
 
-        # ── 7. Execute Trade if Signal is Confident ──────────────────────────
+        # ── 7. Execute Trade if Signal is Confident and Trading is Enabled ────
         direction = prediction.get("direction")
         confidence = prediction.get("confidence", 0)
         should_trade = prediction.get("should_trade", False)
         sl_pct = prediction.get("stop_loss_pct")
         tp_pct = prediction.get("take_profit_pct")
 
-        if should_trade and direction in ["BUY", "SELL"]:
+        if self.trading_active and should_trade and direction in ["BUY", "SELL"]:
             amount_usdt = settings.trade_amount_usdt
 
             # Expert Risk Guard: Check balance before execution
@@ -329,10 +324,16 @@ class TradingEngine:
                 if pos:
                     await broadcast_event("position_opened", pos.to_dict())
         else:
+            # Broadcast analysis update even if we didn't trade
+            status_msg = f"🔍 Market Analysis Synced | Confidence: {confidence:.1f}%"
+            if self.trading_active:
+                status_msg += f" (Need ≥ {self.predictor.threshold}%)"
+            else:
+                status_msg += " | [Trading Disabled]"
+                
             self._set_status(
-                BotStatus.WAITING,
-                f"🔍 Monitoring {self.symbol} — confidence {prediction.get('confidence', 0):.1f}% "
-                f"(need ≥ {self.predictor.threshold}%) — next scan in {CYCLE_INTERVAL.get(self.timeframe,900)}s"
+                BotStatus.RUNNING,
+                status_msg
             )
 
     # ─── Position Monitor ─────────────────────────────────────────────────────
@@ -358,7 +359,7 @@ class TradingEngine:
 
     async def _run_live_update(self):
         """Fetches current price and updates the last candle every 2 seconds."""
-        while self.running:
+        while True:
             try:
                 # Ultra-Low Latency: 0.5s sync for '0ms' perceived lag
                 await asyncio.sleep(0.5)
@@ -441,7 +442,7 @@ class TradingEngine:
             "status_message": self.status_message,
             "symbol":        display_symbol,
             "interval":      '60' if self.timeframe == '1h' else '15' if self.timeframe == '15m' else '1',
-            "running":       self.running,
+            "running":       self.trading_active,
             "cycle_count":   self.cycle_count,
             "started_at":    self.started_at,
             "confidence_threshold": self.predictor.threshold,

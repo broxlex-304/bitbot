@@ -140,7 +140,7 @@ interface Store {
 const defaultBotState: BotState = {
   status: 'idle',
   status_message: 'Bot is idle',
-  symbol: 'BTC/USDT',
+  symbol: 'BTCUSDT.p',
   timeframe: '15m',
   running: false,
   cycle_count: 0,
